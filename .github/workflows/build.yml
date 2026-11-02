@@ -1,0 +1,64 @@
+name: build-apk
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Build APK
+        id: build
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          gradle assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
+
+      # 결과(성공 여부, 로그, 설치 파일)를 ci-out 브랜치에 올려서 확인할 수 있게 한다
+      - name: Publish result branch
+        if: always()
+        run: |
+          mkdir -p out
+          cp build.log out/build.log || echo "no log" > out/build.log
+          echo "${{ steps.build.outcome }}" > out/status.txt
+          echo "${{ github.sha }}" > out/sha.txt
+          echo "${{ github.run_number }}" > out/run.txt
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk out/kkeonae-voca.apk
+          fi
+          cd out
+          git init -q
+          git config user.name "ci"
+          git config user.email "ci@users.noreply.github.com"
+          git checkout -q -b ci-out
+          git add -A
+          git commit -q -m "build ${{ github.run_number }}: ${{ steps.build.outcome }}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" ci-out
+
+      - name: Release
+        if: steps.build.outcome == 'success'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: 꺼내보카 1.0.${{ github.run_number }}
+          files: app/build/outputs/apk/release/app-release.apk
+
+      - name: Fail if build failed
+        if: steps.build.outcome != 'success'
+        run: exit 1

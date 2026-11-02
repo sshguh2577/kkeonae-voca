@@ -1,0 +1,51 @@
+plugins {
+    id 'com.android.application'
+}
+
+// GitHub 자동 빌드 번호를 버전으로 쓴다. 번호가 늘어야 폰에서 업데이트로 설치된다.
+def runNumber = (System.getenv('GITHUB_RUN_NUMBER') ?: '1') as Integer
+
+android {
+    namespace 'kr.kkeonae.voca'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'kr.kkeonae.voca'
+        minSdk 26
+        targetSdk 34
+        versionCode runNumber
+        versionName "1.0.${runNumber}"
+    }
+
+    // 서명 키를 고정해 둬야 업데이트해도 폰 안 기록이 그대로 남는다.
+    // 이 키 파일(keystore/release.p12)은 지우거나 바꾸면 안 된다.
+    signingConfigs {
+        release {
+            storeFile file('keystore/release.p12')
+            storePassword 'kkeonae-voca-2026'
+            keyAlias 'kkeonae'
+            keyPassword 'kkeonae-voca-2026'
+            storeType 'pkcs12'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+        debug {
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}
