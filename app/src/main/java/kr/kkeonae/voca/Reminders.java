@@ -141,6 +141,22 @@ final class Reminders {
         return false;
     }
 
+    /** 오늘(새벽 기준 시각 적용)의 요일이 쉬는 요일인지. 0 = 일요일, JS의 getDay()와 같다. */
+    private static boolean isRestDow(JSONArray dows, long now, int dsh) {
+        if (dows == null) {
+            return false;
+        }
+        Calendar cal = Calendar.getInstance();
+        cal.setTimeInMillis(now - dsh * HOUR);
+        int dow = cal.get(Calendar.DAY_OF_WEEK) - 1;
+        for (int i = 0; i < dows.length(); i++) {
+            if (dows.optInt(i, -1) == dow) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** 날짜별 값. 그날 값이 없을 때 누적값이면 가장 가까운 이전 날 값을 쓴다. */
     private static int valueFor(JSONObject map, String key, boolean cumulative) {
         if (map == null) {
@@ -172,6 +188,18 @@ final class Reminders {
         long now = System.currentTimeMillis();
         String today = dayKey(now, dsh);
         if (contains(s.optJSONArray("attended"), today) && !test) {
+            return;
+        }
+        // 쉬는 요일에는 알림을 보내지 않는다. 앱이 30일치 쉬는 날을 적어 두고,
+        // 앱을 30일 넘게 안 열었으면 요일 설정으로 판단한다.
+        boolean restDay;
+        String restUntil = s.optString("restUntil", "");
+        if (!restUntil.isEmpty() && today.compareTo(restUntil) <= 0) {
+            restDay = contains(s.optJSONArray("restDays"), today);
+        } else {
+            restDay = isRestDow(s.optJSONArray("restDows"), now, dsh);
+        }
+        if (restDay && !test) {
             return;
         }
         int due = valueFor(s.optJSONObject("dueBy"), today, true);

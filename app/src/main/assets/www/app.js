@@ -17,8 +17,11 @@
     autoReduce: true,
     sound: true,
     autoSpeak: false,
-    shortMinutes: 5
+    shortMinutes: 5,
+    restDows: [6] // 쉬는 요일 (0 일요일 ~ 6 토요일)
   };
+  var PASS_ANCHOR = '2026-01-04'; // 일요일. 휴식권은 이날부터 2주 단위로 1장
+  var PASS_DAYS = 14;
 
   var SAMPLE_DAY = {
     kind: 'kkeonae-day', version: 1,
@@ -126,7 +129,10 @@
       schema: 1, createdAt: Date.now(),
       settings: clone(DEFAULT_SETTINGS),
       decks: {}, cards: {}, days: {},
-      meta: { lastBackupAt: 0, bestStreak: 0, welcomed: false }
+      meta: {
+        lastBackupAt: 0, bestStreak: 0, welcomed: false,
+        restHistory: [{ from: F.dayKey(Date.now(), DEFAULT_SETTINGS.dayStartHour), dows: DEFAULT_SETTINGS.restDows.slice() }]
+      }
     };
   }
   function migrate(o) {
@@ -139,7 +145,11 @@
     o.settings.n2 = Object.assign(clone(DEFAULT_SETTINGS.n2), o.settings.n2 || {});
     o.decks = o.decks || {};
     o.days = o.days || {};
+    var hadHistory = !!(o.meta && o.meta.restHistory);
     o.meta = Object.assign(base.meta, o.meta || {});
+    if (!Array.isArray(o.settings.restDows)) o.settings.restDows = DEFAULT_SETTINGS.restDows.slice();
+    // 쉬는 요일 기능이 생기기 전 기록이면, 업데이트한 날부터 적용한다 (지난 날을 소급하지 않음)
+    if (!hadHistory) o.meta.restHistory = [{ from: F.dayKey(Date.now(), o.settings.dayStartHour), dows: o.settings.restDows.slice() }];
     values(o.cards).forEach(function (c) { if (!c.h) c.h = []; if (c.sus == null) c.sus = false; });
     return o;
   }
@@ -147,7 +157,7 @@
     var raw = '';
     try { raw = Native.load() || ''; } catch (e) { raw = ''; }
     if (raw) {
-      try { DB = migrate(JSON.parse(raw)); return; }
+      try { DB = migrate(JSON.parse(raw)); rebalanceRestDays(); return; }
       catch (e) { loadProblem = true; blockSave = true; }
     }
     DB = newDB();
@@ -177,6 +187,52 @@
     var keys = Object.keys(DB.days).sort();
     var created = F.dayKey(DB.createdAt, dsh());
     return keys.length && keys[0] < created ? keys[0] : created;
+  }
+
+  /* ================= 쉬는 요일 ================= */
+  // 그날 적용되던 쉬는 요일 (요일을 바꿔도 지난 기록은 그때 설정대로 본다)
+  function restDowsOn(key) {
+    var hist = DB.meta.restHistory || [], dows = [], best = '';
+    for (var i = 0; i < hist.length; i++) { if (hist[i].from <= key && hist[i].from >= best) { best = hist[i].from; dows = hist[i].dows; } }
+    return dows;
+  }
+  function isRestDay(key) { return restDowsOn(key).indexOf(F.keyToDow(key)) !== -1; }
+  // 바꾼 쉬는 요일은 내일부터 적용 (마감 직전에 오늘을 쉬는 날로 바꿔 연속 기록을 지키는 걸 막는다)
+  function setRestDows(dows) {
+    var from = F.addDaysKey(todayKey(), 1);
+    var hist = (DB.meta.restHistory || []).filter(function (h) { return h.from < from; });
+    hist.push({ from: from, dows: dows.slice() });
+    DB.meta.restHistory = hist;
+    DB.settings.restDows = dows.slice();
+    return rebalanceRestDays();
+  }
+  // 이미 쉬는 날로 잡혀 있는 복습을 앞뒤 날로 옮긴다
+  function rebalanceRestDays() {
+    var dows = DB.settings.restDows || [];
+    if (!dows.length) return 0;
+    var today = todayKey(), moved = 0, i = 0;
+    values(DB.cards).forEach(function (c) {
+      if (c.sus || c.st !== 2) return;
+      var k = F.dayKey(c.due, dsh());
+      if (k <= today || dows.indexOf(F.keyToDow(k)) === -1) return;
+      var ivl = F.daysBetweenKeys(today, k);
+      var alt = (i++ % 2) ? 0.75 : 0.25;
+      var fixed = F.avoidRestDays(today, ivl, dows, function () { return alt; });
+      c.due = F.dayStartOfKey(F.addDaysKey(today, fixed), dsh());
+      moved++;
+    });
+    return moved;
+  }
+  function josa(word, pair) { // pair: '을/를', '이/가', '은/는', '으로/로'
+    var w = String(word || '').trim();
+    var ch = w.charAt(w.length - 1);
+    var code = ch.charCodeAt(0);
+    var hasBatchim;
+    if (code >= 0xAC00 && code <= 0xD7A3) hasBatchim = (code - 0xAC00) % 28 !== 0;
+    else if (/[0-9]/.test(ch)) hasBatchim = '013678'.indexOf(ch) !== -1; // 영 일 삼 육 칠 팔 (십·백도 받침 있음)
+    else hasBatchim = /[lmnr]/i.test(ch);
+    var p = pair.split('/');
+    return w + (hasBatchim ? p[0] : p[1]);
   }
 
   /* ================= 카드 ================= */
@@ -217,30 +273,35 @@
     var capSig = s.newPerDay + '|' + (s.autoReduce ? 1 : 0);
     if (rec.dueStart == null) rec.dueStart = due;
     if (rec.cap == null || rec.capSig !== capSig) { rec.cap = newCapFor(rec.dueStart); rec.capSig = capSig; }
-    var newLeft = Math.max(0, Math.min(newAvail, rec.cap - rec.n));
-    if (!rec.att && !rec.rest && rec.a === 0 && due === 0 && newLeft === 0 && hasCards()) rec.rest = true;
-    return { key: key, end: end, rec: rec, due: due, newLeft: newLeft, newAvail: newAvail, reduced: rec.cap < s.newPerDay };
+    var restDay = isRestDay(key);
+    var newLeft = restDay ? 0 : Math.max(0, Math.min(newAvail, rec.cap - rec.n));
+    if (!restDay && !rec.att && !rec.rest && rec.a === 0 && due === 0 && newLeft === 0 && hasCards()) rec.rest = true;
+    return { key: key, end: end, rec: rec, due: due, newLeft: newLeft, newAvail: newAvail, reduced: !restDay && rec.cap < s.newPerDay, restDay: restDay };
   }
   function estMinutes(due, fresh) { return Math.max(1, Math.round((due * 8 + fresh * 25) / 60)); }
 
   /* ================= 출석 ================= */
-  function attendedKey(k) { var d = DB.days[k]; return !!(d && (d.att || d.rest)); }
-  function weekKey(key) {
-    var d = keyToDate(key); var dow = (d.getDay() + 6) % 7;
-    d.setDate(d.getDate() - dow);
-    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+  function studied(k) { var d = DB.days[k]; return !!(d && (d.att || d.rest)); }
+  function attendedKey(k) { return studied(k) || isRestDay(k); }
+  function weekStartKey(key) { return F.addDaysKey(key, -F.keyToDow(key)); } // 일요일 시작
+  function passKey(key) { return Math.floor(F.daysBetweenKeys(PASS_ANCHOR, key) / PASS_DAYS); }
+  function passWindow(key) {
+    var start = F.addDaysKey(PASS_ANCHOR, passKey(key) * PASS_DAYS);
+    return { start: start, end: F.addDaysKey(start, PASS_DAYS - 1) };
   }
-  // refKey 시점의 연속 출석 (주마다 하루는 휴식권으로 이어 줌)
+  // refKey 시점의 연속 출석(공부한 날 수). 쉬는 요일은 세지 않고 건너뛰기만 하고(끊기지 않음),
+  // 그 밖에 빠진 날은 2주마다 하루를 휴식권으로 이어 준다
   function streakAt(refKey) {
     var first = firstDayKey();
     var k = attendedKey(refKey) ? refKey : F.addDaysKey(refKey, -1);
     var count = 0, frozen = [], pending = [], used = {};
     while (F.daysBetweenKeys(first, k) >= 0) {
-      if (attendedKey(k)) { count++; if (pending.length) { frozen = frozen.concat(pending); pending = []; } }
+      if (studied(k)) { count++; if (pending.length) { frozen = frozen.concat(pending); pending = []; } }
+      else if (isRestDay(k)) { /* 쉬는 날: 그냥 지나감 */ }
       else {
-        var wk = weekKey(k);
-        if (used[wk]) break;
-        used[wk] = true; pending.push(k);
+        var pk = passKey(k);
+        if (used[pk]) break;
+        used[pk] = true; pending.push(k);
       }
       k = F.addDaysKey(k, -1);
     }
@@ -269,26 +330,49 @@
       perDay[k] = (perDay[k] || 0) + 1;
     });
     var plan = todayPlan();
-    var dueBy = {}, newBy = {}, streakBy = {};
+    var dueBy = {}, newBy = {}, streakBy = {}, restDays = [];
     var cum = todayDue, newPool = Math.max(0, plan.newAvail - plan.newLeft);
     dueBy[key] = cum; newBy[key] = plan.newLeft;
+    if (plan.restDay) restDays.push(key);
     for (var i = 1; i <= 30; i++) {
       var k = F.addDaysKey(key, i);
       cum += perDay[k] || 0;
       dueBy[k] = cum;
-      var cap = Math.min(newCapFor(cum), newPool);
+      var rest = isRestDay(k);
+      if (rest) restDays.push(k);
+      var cap = rest ? 0 : Math.min(newCapFor(cum), newPool);
       newBy[k] = cap; newPool -= cap;
     }
     for (var j = 0; j <= 7; j++) { var kk = F.addDaysKey(key, j); streakBy[kk] = streakAt(kk).count; }
-    var attended = Object.keys(DB.days).filter(attendedKey).sort().slice(-60);
+    var attended = Object.keys(DB.days).filter(studied).sort().slice(-60);
     return {
       v: 1, generatedAt: now, dayStartHour: s.dayStartHour,
       n1: { on: !!s.n1.on, h: s.n1.h, m: s.n1.m },
       n2: { on: !!s.n2.on, h: s.n2.h, m: s.n2.m },
       hasCards: hasCards(), attended: attended,
+      restDays: restDays, restUntil: F.addDaysKey(key, 30), restDows: (s.restDows || []).slice(),
       dueBy: dueBy, newBy: newBy, streakBy: streakBy,
       minAnswers: s.minAnswers, lastBackupAt: DB.meta.lastBackupAt || 0
     };
+  }
+
+  /* ================= 복습 기억률 (복습 카드만 셈) ================= */
+  // 기록 한 줄: [시각(초), 평가, 문제방식, 풀기 전 상태] — 상태 2(복습)인 것만 센다
+  function reviewStats(fromKey, toKey) {
+    var out = { total: 0, good: 0, byDay: {} };
+    var d0 = dsh();
+    cards().forEach(function (c) {
+      (c.h || []).forEach(function (x) {
+        if (x[3] !== 2) return;
+        var k = F.dayKey(x[0] * 1000, d0);
+        if (k < fromKey || k > toKey) return;
+        out.total++; if (x[1] >= 3) out.good++;
+        var b = out.byDay[k] || (out.byDay[k] = { total: 0, good: 0 });
+        b.total++; if (x[1] >= 3) b.good++;
+      });
+    });
+    out.rate = out.total ? Math.round(out.good / out.total * 100) : null;
+    return out;
   }
 
   /* ================= 가져오기·백업 ================= */
@@ -375,7 +459,7 @@
     try {
       var r = importDay(obj);
       saveNow(); closeAllModals(); render();
-      var msg = r.deck.title + '을 가져왔어요. 새 단어 ' + r.added + '개';
+      var msg = josa(r.deck.title, '을/를') + ' 가져왔어요. 새 단어 ' + r.added + '개';
       if (r.updated) msg += ', 고친 단어 ' + r.updated + '개';
       toast(msg + '.');
     } catch (e) {
@@ -547,26 +631,30 @@
   /* ================= 홈 ================= */
   function weekStrip() {
     var key = todayKey();
-    var monday = weekKey(key);
+    var sunday = weekStartKey(key);
     var st = streakAt(key);
     var html = '<ol class="week">';
     for (var i = 0; i < 7; i++) {
-      var k = F.addDaysKey(monday, i);
+      var k = F.addDaysKey(sunday, i);
       var d = DB.days[k];
       var diff = F.daysBetweenKeys(key, k);
-      var label = DOW[keyToDate(k).getDay()];
+      var label = DOW[F.keyToDow(k)];
       var mark;
       if (d && d.att) mark = sealSVG('출석', '', dayRot(k));
+      else if (isRestDay(k)) mark = '<span class="seal-rest' + (diff > 0 ? ' later' : '') + '" title="쉬는 날">' + ICON.moon + '</span>';
       else if (d && d.rest) mark = '<span class="seal-rest" title="할 카드가 없던 날">' + ICON.moon + '</span>';
-      else if (st.frozen.indexOf(k) !== -1) mark = '<span class="seal-empty" style="border-style:dashed;border-color:var(--ink-3)" title="휴식권 사용"></span>';
+      else if (st.frozen.indexOf(k) !== -1) mark = '<span class="seal-empty pass" title="휴식권 사용"></span>';
       else if (diff === 0) mark = '<span class="seal-empty today"></span>';
       else if (diff > 0) mark = '<span class="seal-empty future"></span>';
       else mark = '<span class="seal-empty"></span>';
       html += '<li class="' + (diff === 0 ? 'is-today' : '') + '"><span class="dow">' + label + '</span>' + mark + '</li>';
     }
     html += '</ol>';
-    var usedThisWeek = st.frozen.some(function (k) { return weekKey(k) === monday; });
-    var note = usedThisWeek ? '이번 주 휴식권을 썼어요. 다음 주 월요일에 다시 생겨요.' : '이번 주 휴식권 1장이 남았어요. 하루 빠져도 연속 기록이 이어져요.';
+    var win = passWindow(key);
+    var used = st.frozen.some(function (k) { return passKey(k) === passKey(key); });
+    var note = used
+      ? '휴식권을 썼어요. ' + keyLabel(F.addDaysKey(win.end, 1), true) + '에 새로 생겨요.'
+      : '휴식권 1장이 있어요. ' + keyLabel(win.end) + '까지 하루 빠져도 연속 기록이 이어져요.';
     return { html: html, note: note, streak: st.count };
   }
 
@@ -590,13 +678,18 @@
     var total = plan.due + plan.newLeft;
     var desc, headline = total + '장', headClass = 'today-total';
     var dueTomorrow = Math.max(0, countDue(dayEndMs(F.addDaysKey(key, 1))) - plan.due);
-    if (total === 0 && plan.rec.a > 0) { headline = '오늘 카드는 다 꺼냈어요'; headClass += ' word'; desc = '내일 복습 예정은 ' + dueTomorrow + '장이에요.'; }
+    if (plan.restDay && plan.rec.a === 0) {
+      headline = '오늘은 쉬는 날이에요'; headClass += ' word';
+      desc = plan.due ? '밀린 복습 ' + plan.due + '장이 있어요. 하고 싶으면 해도 되고, 내일 해도 돼요.' : '오늘은 복습이 잡혀 있지 않아요. 푹 쉬고 내일 만나요.';
+    }
+    else if (total === 0 && plan.rec.a > 0) { headline = '오늘 카드는 다 꺼냈어요'; headClass += ' word'; desc = isRestDay(F.addDaysKey(key, 1)) ? '내일은 쉬는 날이에요.' : '내일 복습 예정은 ' + dueTomorrow + '장이에요.'; }
     else if (total === 0) { headline = '오늘은 쉬어 가는 날이에요'; headClass += ' word'; desc = '복습할 카드가 없어요. 새 Day를 가져오면 새 단어가 생겨요.'; }
     else desc = '복습 ' + plan.due + '장, 새 단어 ' + plan.newLeft + '장이에요. 약 ' + estMinutes(plan.due, plan.newLeft) + '분 걸려요.';
     if (plan.reduced) desc += ' 복습이 많아서 오늘 새 단어를 ' + plan.rec.cap + '장으로 줄였어요.';
     var goal = DB.settings.minAnswers;
     var meter;
     if (plan.rec.att) meter = '<p class="meter-label">' + sealSVG('출석', '', -8) + '오늘 출석했어요. 더 하면 내일이 가벼워져요.</p>';
+    else if (plan.restDay) meter = '<p class="meter-label">쉬는 날이라 공부를 안 해도 연속 기록이 이어져요.</p>';
     else if (plan.rec.rest) meter = '<p class="meter-label">할 카드가 없는 날이라 출석으로 쳐 줘요.</p>';
     else {
       var pct = Math.min(100, Math.round(plan.rec.a / goal * 100));
@@ -616,11 +709,18 @@
       '<p class="' + headClass + '">' + esc(headline) + '</p>' +
       '<p class="today-desc">' + esc(desc) + '</p>' + meter +
       '</div></div>' +
-      '<div class="home-actions"><button class="btn primary" data-act="study" ' + (canStudy ? '' : 'disabled') + '>공부 시작</button>' +
+      '<div class="home-actions"><button class="btn ' + (plan.restDay && !plan.rec.a ? 'quiet' : 'primary') + '" data-act="study" ' + (canStudy ? '' : 'disabled') + '>' + (plan.restDay ? '복습만 하기' : '공부 시작') + '</button>' +
       '<button class="btn quiet" data-act="short" ' + (canStudy ? '' : 'disabled') + '>' + mins + '분만</button></div></section>' +
       notices +
       '<section class="memory"><p class="lead"><strong>' + counts.long + '개</strong> 단어가 머리에 남았어요</p>' +
-      '<p class="sub">전체 ' + totalWords + '개 중 익히는 중 ' + counts.learn + '개, 새 단어 ' + counts.new + '개</p></section>';
+      '<p class="sub">전체 ' + totalWords + '개 중 익히는 중 ' + counts.learn + '개, 새 단어 ' + counts.new + '개</p>' +
+      retentionLine() + '</section>';
+  }
+  function retentionLine() {
+    var key = todayKey();
+    var r = reviewStats(F.addDaysKey(key, -13), key);
+    if (r.total < 20) return '';
+    return '<p class="sub">최근 2주 복습 기억률 ' + r.rate + '% (복습 ' + r.total + '번 중 ' + r.good + '번 기억)</p>';
   }
   function hasPendingLearning() {
     for (var k in DB.cards) { var c = DB.cards[k]; if (!c.sus && (c.st === 1 || c.st === 3)) return true; }
@@ -651,7 +751,7 @@
   /* ================= 공부 ================= */
   var S = null; // 진행 중인 공부
 
-  function studyOpts() { return { retention: DB.settings.retention, dsh: dsh(), fuzz: true }; }
+  function studyOpts() { return { retention: DB.settings.retention, dsh: dsh(), fuzz: true, restDows: DB.settings.restDows || [] }; }
   function retrNow(c, now) { return c.last ? F.retrievability((now - c.last) / DAY, c.S || 0.1) : 0; }
 
   function startStudy(mode, extra) {
@@ -737,7 +837,7 @@
   }
   function headwordClass(w) { return w.length > 16 ? 'xlong' : w.length > 11 ? 'long' : ''; }
   function previewLabel(c, g) {
-    return F.humanizePreview(F.preview(c, g, Date.now(), { retention: DB.settings.retention, dsh: dsh() })) + ' 뒤';
+    return F.humanizePreview(F.preview(c, g, Date.now(), studyOpts())) + ' 뒤';
   }
   function deckTitle(id) { var d = DB.decks[id]; return d ? d.title : ''; }
 
@@ -847,10 +947,11 @@
       cur: { id: S.cur.id, mode: S.cur.mode }
     };
     var wasNew = c.st === 0;
+    var stBefore = c.st;
     var res = F.schedule(c, g, now, studyOpts());
     Object.assign(c, res.card);
     var modeCode = { recall: 0, cloze: 1, type: 2 }[S.cur.mode] || 0;
-    c.h.push([Math.round(now / 1000), g, modeCode]);
+    c.h.push([Math.round(now / 1000), g, modeCode, stBefore]);
     rec.a++; if (g >= 3) rec.c++; if (wasNew) rec.n++;
     rec.ms += Math.min(now - S.cur.shownAt, 90000);
     S.answered++; if (g >= 3) S.good++; else S.again++; if (wasNew) S.newSeen++;
@@ -905,16 +1006,18 @@
       '<p class="lead">알았음 ' + s.good + '장, 몰랐음 ' + s.again + '장' + (s.newSeen ? '. 새 단어 ' + s.newSeen + '장을 처음 만났어요.' : '.') + '</p>';
     if (plan.rec.att) {
       html += '<div class="result-stamp">' + sealSVG('출석', '', dayRot(key)) + '<p><strong>오늘 출석했어요</strong>' + (st > 1 ? st + '일 연속이에요.' : '내일도 도장을 이어 가요.') + '</p></div>';
+    } else if (plan.restDay) {
+      html += '<div class="result-stamp"><span class="seal-rest" style="width:64px;height:64px;flex:none">' + ICON.moon + '</span><p><strong>오늘은 쉬는 날이에요</strong>안 채워도 연속 기록은 그대로 이어져요.</p></div>';
     } else {
       var left = Math.max(0, DB.settings.minAnswers - plan.rec.a);
       html += '<div class="result-stamp"><span class="seal-empty today" style="width:64px;height:64px;flex:none"></span><p><strong>출석까지 ' + left + '문제 남았어요</strong>조금만 더 하면 오늘 도장을 받아요.</p></div>';
     }
     var remainToday = plan.due + plan.newLeft;
-    html += '<p class="next">' + (remainToday ? '오늘 남은 카드 ' + remainToday + '장. ' : '오늘 카드는 다 꺼냈어요. ') + '내일 복습 예정 ' + Math.max(0, dueTomorrow) + '장.</p>';
+    html += '<p class="next">' + (remainToday ? '오늘 남은 카드 ' + remainToday + '장. ' : '오늘 카드는 다 꺼냈어요. ') + (isRestDay(tomorrow) ? '내일은 쉬는 날이에요.' : '내일 복습 예정 ' + Math.max(0, dueTomorrow) + '장.') + '</p>';
     html += '<div class="spacer"></div><div class="btns">';
-    if (!plan.rec.att && (remainToday > 0 || hasPendingLearning())) html += '<button class="btn primary wide" data-act="study">이어서 하기</button>';
+    if (!plan.rec.att && !plan.restDay && (remainToday > 0 || hasPendingLearning())) html += '<button class="btn primary wide" data-act="study">이어서 하기</button>';
     else if (remainToday > 0) html += '<button class="btn quiet wide" data-act="study">남은 카드도 하기</button>';
-    html += '<button class="btn ' + (plan.rec.att ? 'primary' : 'quiet') + ' wide" data-act="close-overlay">홈으로</button></div></div>';
+    html += '<button class="btn ' + (plan.rec.att || plan.restDay ? 'primary' : 'quiet') + ' wide" data-act="close-overlay">홈으로</button></div></div>';
     openOverlay('result', html);
   }
 
@@ -925,12 +1028,12 @@
     if (!state.calMonth) state.calMonth = [t.getFullYear(), t.getMonth()];
     var y = state.calMonth[0], m = state.calMonth[1];
     var first = new Date(y, m, 1, 12), days = new Date(y, m + 1, 0, 12).getDate();
-    var lead = (first.getDay() + 6) % 7;
+    var lead = first.getDay(); // 일요일 시작
     var st = streakAt(key);
     var html = '<h1 class="page-title">출석</h1>' +
       '<div class="cal-head"><button class="icon-btn" data-act="cal-prev" aria-label="이전 달">' + ICON.back + '</button><h2>' + y + '년 ' + (m + 1) + '월</h2>' +
       '<button class="icon-btn" data-act="cal-next" aria-label="다음 달">' + ICON.next + '</button></div><div class="cal-grid">';
-    ['월', '화', '수', '목', '금', '토', '일'].forEach(function (d) { html += '<div class="cal-dow">' + d + '</div>'; });
+    DOW.forEach(function (d) { html += '<div class="cal-dow">' + d + '</div>'; });
     var monthCount = 0;
     for (var i = 0; i < lead; i++) html += '<div class="cal-cell out"><span class="num">.</span></div>';
     for (var d = 1; d <= days; d++) {
@@ -938,12 +1041,13 @@
       var rec = DB.days[k];
       var cls = 'cal-cell', inner = '<span class="num">' + d + '</span>', label = keyLabel(k);
       if (rec && rec.att) { cls += ' att'; inner = sealSVG(String(d), '', dayRot(k)) + inner; monthCount++; label += ' 출석'; }
+      else if (isRestDay(k)) { cls += ' rest' + (k > key ? ' later' : ''); inner = '<span class="moon">' + ICON.moon + '</span>' + inner; label += ' 쉬는 날'; }
       else if (rec && rec.rest) { inner = '<span class="mark"></span>' + inner; monthCount++; label += ' 할 카드가 없던 날'; }
       else if (st.frozen.indexOf(k) !== -1) { inner = '<span class="mark freeze"></span>' + inner; label += ' 휴식권 사용'; }
       if (k === key) cls += ' today';
       html += '<div class="' + cls + '" aria-label="' + esc(label) + '">' + inner + '</div>';
     }
-    html += '</div><div class="cal-legend"><span>' + sealSVG('출석', '', -6) + '출석</span><span><i class="k"></i>할 카드가 없던 날</span><span><i class="k freeze"></i>휴식권 사용</span></div>';
+    html += '</div><div class="cal-legend"><span>' + sealSVG('출석', '', -6) + '출석</span><span><i class="k moon">' + ICON.moon + '</i>쉬는 날</span><span><i class="k"></i>할 카드가 없던 날</span><span><i class="k freeze"></i>휴식권 사용</span></div>';
     html += '<dl class="facts"><div><dt>이번 달 출석</dt><dd>' + monthCount + '일</dd></div><div><dt>지금 연속</dt><dd>' + st.count + '일</dd></div><div><dt>최장 연속</dt><dd>' + Math.max(DB.meta.bestStreak || 0, st.count) + '일</dd></div></dl>';
 
     // 앞으로 7일 복습
@@ -954,22 +1058,37 @@
       var end = dayEndMs(kk);
       var n = 0;
       cards().forEach(function (c) { if (!c.sus && c.st !== 0 && c.due >= start && c.due < end) n++; });
-      rows.push([j === 0 ? '오늘' : j === 1 ? '내일' : keyLabel(kk).replace(/^\d+월 /, '') + ' ' + DOW[keyToDate(kk).getDay()], n]);
+      rows.push([j === 0 ? '오늘' : j === 1 ? '내일' : keyLabel(kk).replace(/^\d+월 /, '') + '(' + DOW[F.keyToDow(kk)] + ')', n, j > 0 && isRestDay(kk)]);
       if (n > max) max = n;
     }
     html += '<section class="section"><h2>앞으로 7일 복습</h2><table class="bar-table"><tbody>';
     rows.forEach(function (r) {
-      html += '<tr><th scope="row">' + r[0] + '</th><td><div class="bar"><i style="width:' + Math.max(1, Math.round(r[1] / max * 78)) + '%"></i><b>' + r[1] + '장</b></div></td></tr>';
+      var cell = r[2] && !r[1] ? '<span class="muted small">쉬는 날</span>' : '<div class="bar"><i style="width:' + Math.max(1, Math.round(r[1] / max * 78)) + '%"></i><b>' + r[1] + '장</b></div>';
+      html += '<tr><th scope="row">' + r[0] + '</th><td>' + cell + '</td></tr>';
     });
     html += '</tbody></table><p class="hint">새 단어는 빼고 센 숫자예요.</p></section>';
 
+    // 복습 기억률: 며칠 지나 다시 나온 카드(복습 상태)를 기억했는지. 새 단어와 같은 날 반복은 빼고 센다
+    var rs = reviewStats(F.addDaysKey(key, -13), key);
+    html += '<section class="section"><h2>복습 기억률</h2>';
+    if (rs.total < 20) {
+      html += '<p class="hint" style="margin-top:0">며칠 지나 다시 나온 단어를 얼마나 기억했는지 보여 줘요. 복습을 20번 넘게 하면 계산해요. 지금까지 ' + rs.total + '번.</p>';
+    } else {
+      var verdict = rs.rate >= 85 ? '잘 되고 있어요.' : rs.rate >= 75 ? '조금 낮아요. 이대로 1주 더 지켜봐요.' : '많이 까먹고 있어요. 설정에서 복습 양을 \'많이\'로 바꿔 보세요.';
+      html += '<p class="rate-line"><strong>' + rs.rate + '%</strong> 최근 2주, 복습 ' + rs.total + '번 중 ' + rs.good + '번 기억</p>' +
+        '<p class="hint">' + verdict + ' 90% 안팎이 정상이에요. 새 단어를 처음 볼 때 틀린 건 여기에 안 들어가요.</p>';
+    }
+    html += '</section>';
+
     // 최근 7일 공부
-    html += '<section class="section"><h2>최근 7일 공부</h2><table class="plain-table"><thead><tr><th>날짜</th><th class="num">문제</th><th class="num">알았음</th><th class="num">시간</th></tr></thead><tbody>';
+    html += '<section class="section"><h2>최근 7일 공부</h2><table class="plain-table"><thead><tr><th>날짜</th><th class="num">문제</th><th class="num">복습 기억</th><th class="num">시간</th></tr></thead><tbody>';
     for (var q = 0; q < 7; q++) {
       var dk = F.addDaysKey(key, -q), r2 = DB.days[dk] || { a: 0, c: 0, ms: 0 };
-      html += '<tr><td>' + (q === 0 ? '오늘' : keyLabel(dk)) + '</td><td class="num">' + r2.a + '</td><td class="num">' + (r2.a ? Math.round(r2.c / r2.a * 100) + '%' : '-') + '</td><td class="num">' + (r2.ms ? Math.max(1, Math.round(r2.ms / MIN)) + '분' : '-') + '</td></tr>';
+      var rb = rs.byDay[dk];
+      var dayName = q === 0 ? '오늘' : keyLabel(dk) + '(' + DOW[F.keyToDow(dk)] + ')';
+      html += '<tr><td>' + dayName + (isRestDay(dk) && !r2.a ? ' <span class="muted small">쉼</span>' : '') + '</td><td class="num">' + r2.a + '</td><td class="num">' + (rb ? rb.good + '/' + rb.total : '-') + '</td><td class="num">' + (r2.ms ? Math.max(1, Math.round(r2.ms / MIN)) + '분' : '-') + '</td></tr>';
     }
-    html += '</tbody></table></section>';
+    html += '</tbody></table><p class="hint">복습 기억은 기억한 수/복습한 수예요.</p></section>';
     return html;
   }
 
@@ -1086,12 +1205,25 @@
   function row(label, desc, control) {
     return '<div class="row"><div class="label"><p>' + label + '</p>' + (desc ? '<p class="desc">' + desc + '</p>' : '') + '</div>' + control + '</div>';
   }
+  function restDowRow(s) {
+    var cur = (s.restDows || [])[0];
+    var pendingNote = '';
+    var today = todayKey(), tomorrow = F.addDaysKey(today, 1);
+    var nowDows = restDowsOn(today), nextDows = restDowsOn(tomorrow);
+    if (String(nowDows) !== String(nextDows)) pendingNote = ' 오늘은 바꾸기 전 설정대로 가요.';
+    return '<div class="row col"><div class="label"><p>쉬는 요일</p><p class="desc">이날은 새 단어 없이 쉬고, 복습은 앞뒤 날로 옮겨요. 알림도 안 와요. 바꾸면 내일부터 적용돼요.' + pendingNote + ' 한 번 더 누르면 쉬는 요일이 없어져요.</p></div>' +
+      '<div class="seg days" role="group" aria-label="쉬는 요일">' + DOW.map(function (d, i) {
+        return '<button data-act="rest-dow" data-v="' + i + '" aria-pressed="' + (cur === i) + '">' + d + '</button>';
+      }).join('') + '</div>' +
+      '<p class="desc">휴식권: 쉬는 요일 말고도 2주에 하루는 빠져도 연속 기록이 이어져요.</p></div>';
+  }
   function renderSettings() {
     var s = DB.settings;
     var html = '<h1 class="page-title">설정</h1>';
     html += '<section class="group"><h2>공부</h2>' +
       row('하루 새 단어', '처음 보는 단어를 하루에 몇 개까지 꺼낼지 정해요.', stepper('newPerDay', s.newPerDay, '개')) +
       row('출석 기준', '하루에 이만큼 풀면 출석 도장을 찍어요.', seg('minAnswers', [[10, '10'], [20, '20'], [30, '30'], [40, '40']], s.minAnswers)) +
+      restDowRow(s) +
       row('복습 양', '많이 하면 덜 까먹고, 적게 하면 시간이 덜 들어요.', seg('retention', [[0.85, '적게'], [0.9, '보통'], [0.95, '많이']], s.retention)) +
       row('짧게 공부하는 시간', '홈에서 \'' + s.shortMinutes + '분만\'을 누르면 이 시간만큼만 공부해요.', seg('shortMinutes', [[3, '3분'], [5, '5분'], [10, '10분']], s.shortMinutes)) +
       row('문제 섞어 내기', '익숙한 단어는 가끔 직접 쓰기나 예문 빈칸으로 나와요.', sw('mix', s.mix, '문제 섞어 내기')) +
@@ -1196,7 +1328,7 @@
     },
     'deck-delete': function (el) {
       var id = el.dataset.id, d = DB.decks[id];
-      confirmSheet(d.title + '을 지울까요?', '이 Day의 단어와 진도가 모두 지워져요.', '지우기', function () {
+      confirmSheet(josa(d.title, '을/를') + ' 지울까요?', '이 Day의 단어와 진도가 모두 지워져요.', '지우기', function () {
         cards().forEach(function (c) { if (c.deck === id) delete DB.cards[c.id]; });
         delete DB.decks[id]; saveNow(); closeAllModals(); closeOverlay(); toast('지웠어요.');
       }, true);
@@ -1220,6 +1352,13 @@
       DB.settings[name] = name === 'retention' ? parseFloat(v) : parseInt(v, 10);
       if (name === 'minAnswers' && checkAttendance(todayPlan())) toast('기준을 채워서 오늘 출석 도장을 찍었어요.');
       saveNow(); render();
+    },
+    'rest-dow': function (el) {
+      var v = parseInt(el.dataset.v, 10);
+      var next = (DB.settings.restDows || []).indexOf(v) !== -1 ? [] : [v];
+      var moved = setRestDows(next);
+      saveNow(); render();
+      toast(next.length ? '내일부터 ' + DOW[v] + '요일에 쉬어요.' + (moved ? ' 그날 복습 ' + moved + '장은 앞뒤 날로 옮겼어요.' : '') : '쉬는 요일을 없앴어요. 내일부터 매일 공부해요.');
     },
     'notif-on': function () { Native.requestNotif(); },
     'exact-alarm': function () { Native.openExactAlarm(); },
@@ -1358,5 +1497,6 @@
   maybeWelcome();
 
   // 테스트용 접근점
-  window.__kv = { get db() { return DB; }, todayPlan: todayPlan, streakAt: streakAt, buildSummary: buildSummary, importText: importText, checkTyped: checkTyped, clozeParts: clozeParts };
+  window.__kv = { get db() { return DB; }, todayPlan: todayPlan, streakAt: streakAt, buildSummary: buildSummary, importText: importText, checkTyped: checkTyped, clozeParts: clozeParts,
+    isRestDay: isRestDay, passWindow: passWindow, reviewStats: reviewStats, josa: josa, rebalanceRestDays: rebalanceRestDays };
 })();

@@ -45,6 +45,24 @@
     var ta = Date.UTC(pa[0], pa[1], pa[2]), tb = Date.UTC(pb[0], pb[1], pb[2]);
     return Math.round((tb - ta) / DAY);
   }
+  function keyToDow(key) { // 0 일요일 ~ 6 토요일
+    var p = keyParts(key);
+    return new Date(p[0], p[1], p[2], 12).getDay();
+  }
+  /*
+   * 쉬는 요일에 복습이 잡히지 않게 하루 앞이나 뒤로 옮긴다.
+   * 간격이 짧으면(7일 이하) 까먹기 전에 보도록 앞으로, 길면 앞뒤로 나눠서 옮긴다.
+   */
+  function avoidRestDays(fromKey, ivl, restDows, rnd) {
+    if (!restDows || !restDows.length) return ivl;
+    for (var tries = 0; tries < 7; tries++) {
+      if (restDows.indexOf(keyToDow(addDaysKey(fromKey, ivl))) === -1) return ivl;
+      if (ivl <= 1) ivl += 1;
+      else if (ivl <= 7) ivl -= 1;
+      else ivl += (rnd() < 0.5 ? -1 : 1);
+    }
+    return ivl;
+  }
 
   /* ---------- FSRS 수식 ---------- */
   function initS(g) { return Math.max(W[g - 1], 0.1); }
@@ -103,6 +121,7 @@
     function toReview() {
       var ivl = intervalDays(c.S, retention);
       if (opts.fuzz) ivl = fuzzDays(ivl, rnd);
+      ivl = avoidRestDays(todayKey, ivl, opts.restDows, rnd);
       c.st = 2; c.step = 0;
       c.due = dayStartOfKey(addDaysKey(todayKey, ivl), dsh);
       return ivl;
@@ -149,7 +168,7 @@
 
   /* 버튼 아래 보여 줄 다음 복습 시점 (흔들림 없이) */
   function preview(card, g, now, opts) {
-    var o = { retention: opts.retention, dsh: opts.dsh, fuzz: false };
+    var o = { retention: opts.retention, dsh: opts.dsh, fuzz: false, restDows: opts.restDows, rnd: function () { return 0.25; } };
     var r = schedule(card, g, now, o);
     if (r.card.st === 2) return { days: Math.round((r.card.due - dayStartOfKey(dayKey(now, o.dsh), o.dsh)) / DAY) };
     return { minutes: Math.max(1, Math.round((r.card.due - now) / MIN)) };
@@ -168,7 +187,7 @@
   root.FSRS = {
     W: W, DAY: DAY, MIN: MIN,
     dayKey: dayKey, dayStartOfKey: dayStartOfKey, addDaysKey: addDaysKey,
-    daysBetweenKeys: daysBetweenKeys,
+    daysBetweenKeys: daysBetweenKeys, keyToDow: keyToDow, avoidRestDays: avoidRestDays,
     retrievability: retrievability, intervalDays: intervalDays,
     schedule: schedule, preview: preview, humanizePreview: humanizePreview
   };
