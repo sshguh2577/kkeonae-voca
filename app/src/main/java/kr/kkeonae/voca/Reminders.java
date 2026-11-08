@@ -207,7 +207,12 @@ final class Reminders {
         int streak = valueFor(s.optJSONObject("streakBy"), today, false);
         int goal = s.optInt("minAnswers", 20);
         int total = due + fresh;
-        int minutes = Math.max(1, Math.round((due * 8 + fresh * 25) / 60f));
+        // 앱이 최근 기록으로 잰 한 장당 시간(1.0.6부터). 없으면 예전 기본값(복습 8초, 새 단어 25초)
+        long revMs = s.optLong("revMs", 8000);
+        long newMs = s.optLong("newMs", 25000);
+        if (revMs <= 0) revMs = 8000;
+        if (newMs <= 0) newMs = 25000;
+        int minutes = (int) Math.max(1, Math.round((due * revMs + fresh * newMs) / 60000.0));
 
         String title;
         StringBuilder body = new StringBuilder();

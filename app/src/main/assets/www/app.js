@@ -186,8 +186,16 @@
   function dayEndMs(key) { return F.dayStartOfKey(F.addDaysKey(key, 1), dsh()); }
   function dayRec(key) {
     var d = DB.days[key];
-    if (!d) d = DB.days[key] = { a: 0, c: 0, n: 0, ms: 0 };
+    // ms: 그날 공부 시간 전체(연습 포함). mN·mR: 새 단어(처음·익히는 단계) / 복습에 쓴 시간. 1.0.6부터 따로 센다
+    if (!d) d = DB.days[key] = { a: 0, c: 0, n: 0, ms: 0, mN: 0, mR: 0 };
     return d;
+  }
+  // 공부 시간 글자: 1분 미만도 1분으로, 60분부터는 '1시간 5분'
+  function fmtMin(ms) {
+    if (!ms) return '0분';
+    var m = Math.max(1, Math.round(ms / MIN));
+    if (m < 60) return m + '분';
+    return Math.floor(m / 60) + '시간' + (m % 60 ? ' ' + (m % 60) + '분' : '');
   }
   function firstDayKey() {
     var keys = Object.keys(DB.days).sort();
@@ -295,7 +303,46 @@
     if (n) rec.n = Math.max(0, rec.n - n);
     return n;
   }
-  function estMinutes(due, fresh) { return Math.max(1, Math.round((due * 8 + fresh * 25) / 60)); }
+  /* 예상 시간: 최근 2주 내 기록으로 '새 단어 1개'와 '복습 1장'에 실제로 쓴 시간을 잰다.
+     기록이 적을 때는 기본값(복습 8초, 새 단어 25초)을 5장 몫만큼 섞어 한두 번의 기록에 휘둘리지 않게 한다.
+     새 단어 시간에는 처음 본 날 익히는 단계(1분·10분 뒤 다시)도 들어간다. 연습 시간은 뺀다. */
+  var PACE_PRIOR = { rev: 8000, neu: 25000, k: 5 };
+  function paceStats() {
+    var today = todayKey(), from = F.addDaysKey(today, -13), d0 = dsh();
+    var fromMs = F.dayStartOfKey(from, d0);
+    var byDay = {};
+    cards().forEach(function (c) {
+      var h = c.h || [];
+      for (var i = h.length - 1; i >= 0; i--) { // 기록은 시간순이라 2주보다 오래된 줄에서 멈춘다 (저장할 때마다 불려서 가볍게)
+        var x = h[i], t = x[0] * 1000;
+        if (t < fromMs) break;
+        var k = F.dayKey(t, d0);
+        if (k > today) continue;
+        var b = byDay[k] || (byDay[k] = { nA: 0, nW: 0, rA: 0, rW: 0 });
+        if (x[3] === 0 || x[3] === 1) { b.nA++; if (x[3] === 0) b.nW++; }
+        else { b.rA++; if (x[3] === 2) b.rW++; }
+      }
+    });
+    var msN = 0, wN = 0, msR = 0, wR = 0;
+    Object.keys(byDay).forEach(function (k) {
+      var b = byDay[k], r = DB.days[k];
+      if (!r || !r.ms || !r.a) return;
+      var mN, mR;
+      if (r.mN != null && r.mR != null) { mN = r.mN; mR = r.mR; }
+      else { var per = r.ms / r.a; mN = b.nA * per; mR = b.rA * per; } // 1.0.5까지의 기록: 그날 한 문제 평균으로 나눈다
+      msN += mN; wN += b.nW; msR += mR; wR += b.rW;
+    });
+    var k0 = PACE_PRIOR.k;
+    return {
+      newMs: (PACE_PRIOR.neu * k0 + msN) / (k0 + wN),
+      revMs: (PACE_PRIOR.rev * k0 + msR) / (k0 + wR),
+      newWords: wN, reviews: wR, personal: wN + wR >= 10
+    };
+  }
+  function estMinutes(due, fresh, pace) {
+    var p = pace || paceStats();
+    return Math.max(1, Math.round((due * p.revMs + fresh * p.newMs) / MIN));
+  }
 
   /* ================= 출석 ================= */
   function studied(k) { var d = DB.days[k]; return !!(d && (d.att || d.rest)); }
@@ -362,8 +409,10 @@
     }
     for (var j = 0; j <= 7; j++) { var kk = F.addDaysKey(key, j); streakBy[kk] = streakAt(kk).count; }
     var attended = Object.keys(DB.days).filter(studied).sort().slice(-60);
+    var pace = paceStats();
     return {
       v: 1, generatedAt: now, dayStartHour: s.dayStartHour,
+      revMs: Math.round(pace.revMs), newMs: Math.round(pace.newMs), // 알림의 '약 N분'도 홈 화면과 같은 내 속도로 잰다
       n1: { on: !!s.n1.on, h: s.n1.h, m: s.n1.m },
       n2: { on: !!s.n2.on, h: s.n2.h, m: s.n2.m },
       hasCards: hasCards(), attended: attended,
@@ -743,7 +792,10 @@
     }
     else if (total === 0 && plan.rec.a > 0) { headline = '오늘 카드는 다 꺼냈어요'; headClass += ' word'; desc = isRestDay(F.addDaysKey(key, 1)) ? '내일은 쉬는 날이에요.' : '내일 복습 예정은 ' + dueTomorrow + '장이에요.'; }
     else if (total === 0) { headline = '오늘은 쉬어 가는 날이에요'; headClass += ' word'; desc = '복습할 카드가 없어요. 새 Day를 가져오면 새 단어가 생겨요.'; }
-    else desc = '복습 ' + plan.due + '장, 새 단어 ' + plan.newLeft + '장이에요. 약 ' + estMinutes(plan.due, plan.newLeft) + '분 걸려요.';
+    else {
+      var pace = paceStats();
+      desc = '복습 ' + plan.due + '장, 새 단어 ' + plan.newLeft + '장이에요. 약 ' + estMinutes(plan.due, plan.newLeft, pace) + '분 걸려요' + (pace.personal ? '(내 속도 기준).' : '.');
+    }
     if (plan.reduced) desc += ' 복습이 많아서 오늘 새 단어를 ' + plan.rec.cap + '장으로 줄였어요.';
     var goal = DB.settings.minAnswers;
     var meter;
@@ -764,7 +816,7 @@
     return head +
       '<section class="streak">' + streakLine + ws.html + '<p class="freeze-note">' + ws.note + '</p></section>' +
       '<section class="today"><div class="stack' + (total < 2 ? ' single' : '') + '"><div class="index-card">' +
-      '<p class="card-kicker"><span>오늘 꺼낼 카드</span><span>' + (plan.rec.a ? '오늘 ' + plan.rec.a + '문제 풀었어요' : '') + '</span></p>' +
+      '<p class="card-kicker"><span>오늘 꺼낼 카드</span><span>' + (plan.rec.a ? '오늘 ' + fmtMin(plan.rec.ms) + ' 동안 ' + plan.rec.a + '문제' : '') + '</span></p>' +
       '<p class="' + headClass + '">' + esc(headline) + '</p>' +
       '<p class="today-desc">' + esc(desc) + '</p>' + meter +
       '</div></div>' +
@@ -818,6 +870,9 @@
 
   function studyOpts() { return { retention: DB.settings.retention, dsh: dsh(), fuzz: true, restDows: DB.settings.restDows || [] }; }
   function retrNow(c, now) { return c.last ? F.retrievability((now - c.last) / DAY, c.S || 0.1) : 0; }
+  // 카드 한 장에 쓴 시간: 카드가 뜬 뒤 답할 때까지. 자리를 비운 시간이 들어가지 않게 한 장에 90초까지만 센다
+  function answerMs(now) { return Math.max(0, Math.min(now - S.cur.shownAt, 90000)); }
+  function recSnap(rec) { return { a: rec.a, c: rec.c, n: rec.n, ms: rec.ms, mN: rec.mN, mR: rec.mR, att: !!rec.att, attAt: rec.attAt }; }
 
   function startStudy(mode, extra) {
     var now = Date.now();
@@ -850,7 +905,7 @@
       mode: mode, startedAt: now,
       deadline: mode === 'short' ? now + DB.settings.shortMinutes * MIN : 0,
       queue: nowLearning.concat(queue), pending: pending,
-      cur: null, answered: 0, good: 0, again: 0, newSeen: 0,
+      cur: null, answered: 0, good: 0, again: 0, newSeen: 0, ms: 0,
       attendedNow: false, undo: null, timer: null
     };
     openOverlay('study', '<div class="study" id="study"></div>');
@@ -868,7 +923,7 @@
     S = {
       mode: 'practice', practice: true, deckId: deckId, startedAt: now, deadline: 0,
       queue: seen.concat(fresh).map(function (c) { return c.id; }), pending: [],
-      cur: null, answered: 0, good: 0, again: 0, newSeen: 0, attendedNow: false, undo: null, timer: null,
+      cur: null, answered: 0, good: 0, again: 0, newSeen: 0, ms: 0, attendedNow: false, undo: null, timer: null,
       retry: {}, missed: {}, initialIds: onlyIds ? onlyIds.slice() : null
     };
     openOverlay('study', '<div class="study" id="study"></div>');
@@ -879,13 +934,14 @@
     var now = Date.now();
     var rec = todayPlan().rec;
     S.undo = {
-      id: c.id, card: clone(c), rec: { a: rec.a, c: rec.c, n: rec.n, ms: rec.ms, att: !!rec.att, attAt: rec.attAt },
+      id: c.id, card: clone(c), rec: recSnap(rec),
       queue: S.queue.slice(), pending: [], retry: clone(S.retry), missed: clone(S.missed),
-      stats: { answered: S.answered, good: S.good, again: S.again, newSeen: S.newSeen, attendedNow: S.attendedNow },
+      stats: { answered: S.answered, good: S.good, again: S.again, newSeen: S.newSeen, ms: S.ms, attendedNow: S.attendedNow },
       cur: { id: S.cur.id, mode: S.cur.mode }
     };
     rec.a++; if (g >= 3) rec.c++;
-    rec.ms += Math.min(now - S.cur.shownAt, 90000);
+    var spent = answerMs(now);
+    rec.ms += spent; S.ms += spent; // 연습 시간은 오늘 공부 시간에는 들어가고, 예상 시간 계산(mN·mR)에는 안 들어간다
     S.answered++;
     if (g >= 3) S.good++;
     else {
@@ -1053,9 +1109,9 @@
     var plan0 = todayPlan();
     var rec = plan0.rec;
     S.undo = {
-      id: c.id, card: clone(c), rec: { a: rec.a, c: rec.c, n: rec.n, ms: rec.ms, att: !!rec.att, attAt: rec.attAt },
+      id: c.id, card: clone(c), rec: recSnap(rec),
       queue: S.queue.slice(), pending: S.pending.map(function (x) { return { id: x.id, due: x.due }; }),
-      stats: { answered: S.answered, good: S.good, again: S.again, newSeen: S.newSeen, attendedNow: S.attendedNow },
+      stats: { answered: S.answered, good: S.good, again: S.again, newSeen: S.newSeen, ms: S.ms, attendedNow: S.attendedNow },
       cur: { id: S.cur.id, mode: S.cur.mode }
     };
     var wasNew = c.st === 0;
@@ -1065,7 +1121,11 @@
     var modeCode = { recall: 0, cloze: 1, type: 2 }[S.cur.mode] || 0;
     c.h.push([Math.round(now / 1000), g, modeCode, stBefore]);
     rec.a++; if (g >= 3) rec.c++; if (wasNew) rec.n++;
-    rec.ms += Math.min(now - S.cur.shownAt, 90000);
+    var spent = answerMs(now);
+    rec.ms += spent; S.ms += spent;
+    if (rec.mN != null && rec.mR != null) { // 1.0.6 이후에 생긴 날짜 기록만 나눠 센다 (예전 기록은 평균으로 나눈다)
+      if (stBefore === 0 || stBefore === 1) rec.mN += spent; else rec.mR += spent;
+    }
     S.answered++; if (g >= 3) S.good++; else S.again++; if (wasNew) S.newSeen++;
     if (c.st === 1 || c.st === 3) S.pending.push({ id: c.id, due: c.due });
     var plan = todayPlan();
@@ -1081,9 +1141,11 @@
     DB.cards[u.id] = u.card;
     var rec = dayRec(todayKey());
     rec.a = u.rec.a; rec.c = u.rec.c; rec.n = u.rec.n; rec.ms = u.rec.ms;
+    if (u.rec.mN != null) { rec.mN = u.rec.mN; rec.mR = u.rec.mR; }
     if (!u.rec.att) { delete rec.att; delete rec.attAt; }
     S.queue = u.queue; S.pending = u.pending;
     S.answered = u.stats.answered; S.good = u.stats.good; S.again = u.stats.again; S.newSeen = u.stats.newSeen; S.attendedNow = u.stats.attendedNow;
+    S.ms = u.stats.ms || 0;
     if (u.retry) S.retry = u.retry;
     if (u.missed) S.missed = u.missed;
     // u.queue / u.pending는 다음 카드를 꺼내기 전 모습이라 그대로 되돌리면 된다
@@ -1118,7 +1180,8 @@
     var dueTomorrow = countDue(dayEndMs(tomorrow)) - plan.due;
     var st = streakAt(key).count;
     var html = '<div class="result"><h2>' + s.answered + '장 꺼냈어요</h2>' +
-      '<p class="lead">알았음 ' + s.good + '장, 몰랐음 ' + s.again + '장' + (s.newSeen ? '. 새 단어 ' + s.newSeen + '장을 처음 만났어요.' : '.') + '</p>';
+      '<p class="lead">알았음 ' + s.good + '장, 몰랐음 ' + s.again + '장' + (s.newSeen ? '. 새 단어 ' + s.newSeen + '장을 처음 만났어요.' : '.') + '</p>' +
+      timeLine(s.ms, plan.rec.ms);
     if (plan.rec.att) {
       html += '<div class="result-stamp">' + sealSVG('출석', '', dayRot(key)) + '<p><strong>오늘 출석했어요</strong>' + (st > 1 ? st + '일 연속이에요.' : '내일도 도장을 이어 가요.') + '</p></div>';
     } else if (plan.restDay) {
@@ -1136,6 +1199,12 @@
     openOverlay('result', html);
   }
 
+  // 결과 화면의 공부 시간 줄: 이번에 걸린 시간과 오늘 전체
+  function timeLine(sessionMs, todayMs) {
+    var same = Math.round(sessionMs / MIN) === Math.round(todayMs / MIN);
+    return '<p class="time-line">이번에 <strong>' + fmtMin(sessionMs) + '</strong> 걸렸어요.' +
+      (same ? '' : ' 오늘 모두 ' + fmtMin(todayMs) + '이에요.') + '</p>';
+  }
   function weekMissedIds() {
     var since = F.dayStartOfKey(weekStartKey(todayKey()), dsh());
     return cards().filter(function (c) {
@@ -1152,7 +1221,8 @@
     state.lastMissed = { deck: s.deckId, ids: missed };
     state.lastPractice = { deck: s.deckId, ids: s.initialIds };
     var html = '<div class="result"><h2>연습 ' + s.answered + '문제 했어요</h2>' +
-      '<p class="lead">알았음 ' + s.good + ', 몰랐음 ' + s.again + '. 복습 일정은 바뀌지 않았어요.</p>';
+      '<p class="lead">알았음 ' + s.good + ', 몰랐음 ' + s.again + '. 복습 일정은 바뀌지 않았어요.</p>' +
+      timeLine(s.ms, plan.rec.ms);
     if (missed.length) {
       html += '<ul class="miss-list">' + missed.slice(0, 12).map(function (id) { var c = DB.cards[id]; return '<li><b>' + esc(c.w) + '</b><span>' + esc(c.m) + '</span></li>'; }).join('') + '</ul>' +
         (missed.length > 12 ? '<p class="hint">그 밖에 ' + (missed.length - 12) + '개 더 있어요.</p>' : '');
@@ -1267,13 +1337,16 @@
 
     // 최근 7일 공부
     html += '<section class="section"><h2>최근 7일 공부</h2><table class="plain-table"><thead><tr><th>날짜</th><th class="num">문제</th><th class="num">복습 기억</th><th class="num">시간</th></tr></thead><tbody>';
+    var sumA = 0, sumMs = 0;
     for (var q = 0; q < 7; q++) {
       var dk = F.addDaysKey(key, -q), r2 = DB.days[dk] || { a: 0, c: 0, ms: 0 };
       var rb = rs.byDay[dk];
       var dayName = q === 0 ? '오늘' : keyLabel(dk) + '(' + DOW[F.keyToDow(dk)] + ')';
-      html += '<tr><td>' + dayName + (isRestDay(dk) && !r2.a ? ' <span class="muted small">쉼</span>' : '') + '</td><td class="num">' + r2.a + '</td><td class="num">' + (rb ? rb.good + '/' + rb.total : '-') + '</td><td class="num">' + (r2.ms ? Math.max(1, Math.round(r2.ms / MIN)) + '분' : '-') + '</td></tr>';
+      sumA += r2.a || 0; sumMs += r2.ms || 0;
+      html += '<tr><td>' + dayName + (isRestDay(dk) && !r2.a ? ' <span class="muted small">쉼</span>' : '') + '</td><td class="num">' + r2.a + '</td><td class="num">' + (rb ? rb.good + '/' + rb.total : '-') + '</td><td class="num">' + (r2.ms ? fmtMin(r2.ms) : '-') + '</td></tr>';
     }
-    html += '</tbody></table><p class="hint">복습 기억은 기억한 수/복습한 수예요.</p></section>';
+    html += '</tbody><tfoot><tr><th scope="row">7일 합계</th><td class="num">' + sumA + '</td><td class="num"></td><td class="num">' + (sumMs ? fmtMin(sumMs) : '-') + '</td></tr></tfoot></table>' +
+      '<p class="hint">복습 기억은 기억한 수/복습한 수예요. 시간은 카드를 보고 답하기까지 걸린 시간만 세요(한 장에 90초까지).</p></section>';
     return html;
   }
 
@@ -1847,5 +1920,6 @@
 
   // 테스트용 접근점
   window.__kv = { get db() { return DB; }, parseLines: parseLines, weekMissedIds: weekMissedIds, studyCsv: studyCsv, newQueueCards: newQueueCards, todayPlan: todayPlan, streakAt: streakAt, buildSummary: buildSummary, importText: importText, checkTyped: checkTyped, clozeParts: clozeParts,
-    isRestDay: isRestDay, passWindow: passWindow, reviewStats: reviewStats, josa: josa, rebalanceRestDays: rebalanceRestDays };
+    isRestDay: isRestDay, passWindow: passWindow, reviewStats: reviewStats, josa: josa, rebalanceRestDays: rebalanceRestDays,
+    paceStats: paceStats, estMinutes: estMinutes, fmtMin: fmtMin };
 })();

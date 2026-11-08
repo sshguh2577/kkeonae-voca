@@ -279,6 +279,9 @@ button { cursor: pointer; }
 .result-stamp p { margin: 0; }
 .result-stamp strong { display: block; font-size: 18px; }
 .result .next { margin: 18px 0 0; color: var(--ink-2); }
+.result .time-line { margin: 10px 0 0; color: var(--ink-2); font-size: 15px; }
+.result .time-line strong { color: var(--ink); font-variant-numeric: tabular-nums; }
+.plain-table tfoot th, .plain-table tfoot td { border-bottom: 0; border-top: 1.5px solid var(--line); font-weight: 700; color: var(--ink); }
 .result .spacer { flex: 1; min-height: 30px; }
 .result .btns { display: grid; gap: 10px; }
 
