@@ -7,6 +7,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
@@ -25,10 +26,14 @@ import android.webkit.WebViewClient;
 
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
@@ -135,6 +140,145 @@ public class MainActivity extends Activity {
         });
     }
 
+    /* ---------- 앱 업데이트: GitHub에 올라온 최신 빌드를 받아 설치 화면을 연다 ---------- */
+    private static final String UPDATE_BASE = "https://raw.githubusercontent.com/sshguh2577/kkeonae-voca/ci-out/";
+    private static final String UPDATE_FILE = "kkeonae-voca-update.apk";
+    private volatile boolean updateBusy = false;
+
+    @SuppressWarnings("deprecation")
+    private int installedVersionCode() {
+        try {
+            PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return Build.VERSION.SDK_INT >= 28 ? (int) pi.getLongVersionCode() : pi.versionCode;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private static HttpURLConnection openGet(String url, int readTimeoutMs) throws IOException {
+        HttpURLConnection c = (HttpURLConnection) new URL(url + "?t=" + System.currentTimeMillis()).openConnection();
+        c.setConnectTimeout(10000);
+        c.setReadTimeout(readTimeoutMs);
+        c.setRequestProperty("Cache-Control", "no-cache");
+        c.setInstanceFollowRedirects(true);
+        return c;
+    }
+
+    private static String httpText(String url) throws IOException {
+        HttpURLConnection c = openGet(url, 15000);
+        try {
+            if (c.getResponseCode() != 200) throw new IOException("HTTP " + c.getResponseCode());
+            try (InputStream in = c.getInputStream()) {
+                ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+                return new String(bo.toByteArray(), StandardCharsets.UTF_8).trim();
+            }
+        } finally {
+            c.disconnect();
+        }
+    }
+
+    private void checkUpdateAsync() {
+        new Thread(() -> {
+            JSONObject o = new JSONObject();
+            try {
+                String status = httpText(UPDATE_BASE + "status.txt");
+                int build = Integer.parseInt(httpText(UPDATE_BASE + "run.txt").replaceAll("[^0-9]", ""));
+                o.put("ok", true);
+                o.put("build", build);
+                o.put("current", installedVersionCode());
+                o.put("ready", "success".equals(status));
+            } catch (Exception e) {
+                try {
+                    o.put("ok", false);
+                } catch (Exception ignored) {
+                }
+            }
+            notifyJs("update-info", o.toString());
+        }).start();
+    }
+
+    @SuppressWarnings("deprecation")
+    private void downloadUpdateAsync() {
+        if (updateBusy) return;
+        updateBusy = true;
+        new Thread(() -> {
+            File dir = new File(getCacheDir(), "share");
+            File tmp = new File(dir, UPDATE_FILE + ".part");
+            File out = new File(dir, UPDATE_FILE);
+            HttpURLConnection c = null;
+            try {
+                if (!dir.exists() && !dir.mkdirs()) throw new IOException("dir");
+                c = openGet(UPDATE_BASE + "kkeonae-voca.apk", 30000);
+                if (c.getResponseCode() != 200) throw new IOException("HTTP " + c.getResponseCode());
+                long total = c.getContentLengthLong();
+                long done = 0;
+                int lastPct = -1;
+                try (InputStream in = c.getInputStream(); OutputStream os = new FileOutputStream(tmp)) {
+                    byte[] buf = new byte[16384];
+                    int n;
+                    while ((n = in.read(buf)) > 0) {
+                        os.write(buf, 0, n);
+                        done += n;
+                        if (total > 0) {
+                            int pct = (int) (done * 100 / total);
+                            if (pct != lastPct) {
+                                lastPct = pct;
+                                notifyJs("update-progress", String.valueOf(pct));
+                            }
+                        }
+                    }
+                }
+                // 받은 파일이 정말 이 앱의 더 새 버전인지 확인한다 (서명은 설치할 때 안드로이드가 다시 확인)
+                PackageInfo pi = getPackageManager().getPackageArchiveInfo(tmp.getAbsolutePath(), 0);
+                if (pi == null || !getPackageName().equals(pi.packageName)) throw new IOException("bad apk");
+                long code = Build.VERSION.SDK_INT >= 28 ? pi.getLongVersionCode() : pi.versionCode;
+                if (code <= installedVersionCode()) {
+                    tmp.delete();
+                    notifyJs("update-done", "same");
+                    return;
+                }
+                if (out.exists()) out.delete();
+                if (!tmp.renameTo(out)) throw new IOException("rename");
+                runOnUiThread(this::installUpdate);
+            } catch (Exception e) {
+                tmp.delete();
+                notifyJs("update-done", "fail");
+            } finally {
+                if (c != null) c.disconnect();
+                updateBusy = false;
+            }
+        }).start();
+    }
+
+    private void installUpdate() {
+        File f = new File(new File(getCacheDir(), "share"), UPDATE_FILE);
+        if (!f.exists()) {
+            notifyJs("update-done", "missing");
+            return;
+        }
+        if (!getPackageManager().canRequestPackageInstalls()) {
+            notifyJs("update-done", "permission");
+            try {
+                startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName())));
+            } catch (Exception ignored) {
+            }
+            return;
+        }
+        try {
+            Uri uri = Uri.parse("content://" + ShareProvider.AUTHORITY + "/" + UPDATE_FILE);
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(uri, "application/vnd.android.package-archive");
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+            notifyJs("update-done", "installer");
+        } catch (Exception e) {
+            notifyJs("update-done", "fail");
+        }
+    }
+
     /* ---------- 화면에 신호 보내기 ---------- */
     private void notifyJs(String event, String arg) {
         if (web == null) {
@@ -151,7 +295,10 @@ public class MainActivity extends Activity {
     /* ---------- 파일 저장·공유·불러오기 ---------- */
     /** 확장자로 파일 종류를 정한다 (.csv = 학습 기록 표, 그 밖 = 백업·Day 파일). */
     static String mimeFor(String name) {
-        return name != null && name.toLowerCase(java.util.Locale.ROOT).endsWith(".csv") ? "text/csv" : "application/json";
+        String n = name == null ? "" : name.toLowerCase(java.util.Locale.ROOT);
+        if (n.endsWith(".csv")) return "text/csv";
+        if (n.endsWith(".apk")) return "application/vnd.android.package-archive";
+        return "application/json";
     }
 
     private void startExport(String text, String name) {
@@ -465,6 +612,26 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void testNotification() {
             Reminders.showTest(MainActivity.this);
+        }
+
+        @JavascriptInterface
+        public int versionCode() {
+            return installedVersionCode();
+        }
+
+        @JavascriptInterface
+        public void checkUpdate() {
+            checkUpdateAsync();
+        }
+
+        @JavascriptInterface
+        public void downloadUpdate() {
+            downloadUpdateAsync();
+        }
+
+        @JavascriptInterface
+        public void installUpdate() {
+            runOnUiThread(MainActivity.this::installUpdate);
         }
 
         @JavascriptInterface

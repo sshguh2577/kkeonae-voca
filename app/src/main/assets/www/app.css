@@ -438,3 +438,8 @@ button { cursor: pointer; }
 .miss-list li { display: flex; gap: 10px; align-items: baseline; font-size: 15px; }
 .miss-list b { min-width: 7.5em; color: var(--ink); }
 .miss-list span { color: var(--ink-2); }
+
+/* ---------- 앱 업데이트 내려받기 막대 ---------- */
+.update-bar { height: 8px; border-radius: 99px; background: var(--line); overflow: hidden; margin: 14px 0 6px; }
+.update-bar span { display: block; height: 100%; width: 0; background: var(--blue); transition: width .2s ease-out; }
+.week-miss { margin-top: 10px; }
