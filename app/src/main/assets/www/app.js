@@ -70,6 +70,7 @@
       webFile.addEventListener('change', function () {
         var f = webFile.files && webFile.files[0];
         if (!f) return;
+        if (/^(image|video|audio)\//.test(f.type || '')) { webFile.value = ''; window.__native('picked-fail', /^image/.test(f.type) ? 'image' : 'media'); return; }
         var r = new FileReader();
         r.onload = function () { picked = String(r.result || ''); window.__native('picked', f.name); webFile.value = ''; };
         r.readAsText(f);
@@ -285,6 +286,15 @@
     if (!restDay && !rec.att && !rec.rest && rec.a === 0 && due === 0 && newLeft === 0 && hasCards()) rec.rest = true;
     return { key: key, end: end, rec: rec, due: due, newLeft: newLeft, newAvail: newAvail, reduced: !restDay && rec.cap < s.newPerDay, restDay: restDay };
   }
+  // 오늘 처음 배운 단어를 지우면 오늘 새 단어 몫을 돌려준다 (잘못 들어간 단어가 하루 몫을 먹지 않게)
+  function refundNewToday(list) {
+    var key = todayKey(), rec = DB.days[key];
+    if (!rec || !rec.n) return 0;
+    var start = F.dayStartOfKey(key, dsh()), n = 0;
+    list.forEach(function (c) { (c.h || []).forEach(function (e) { if (e[3] === 0 && e[0] * 1000 >= start) n++; }); });
+    if (n) rec.n = Math.max(0, rec.n - n);
+    return n;
+  }
   function estMinutes(due, fresh) { return Math.max(1, Math.round((due * 8 + fresh * 25) / 60)); }
 
   /* ================= 출석 ================= */
@@ -467,12 +477,30 @@
     return { words: words, bad: bad };
   }
   function listTitle() { var d = new Date(); return '붙여 넣은 단어 ' + (d.getMonth() + 1) + '월 ' + d.getDate() + '일'; }
+  // 사진·문서처럼 글자 파일이 아닌 것을 글자로 읽으면 깨진 글자(U+FFFD)나 0번 글자가 잔뜩 나온다
+  function looksBinary(text) {
+    var s = String(text || '').slice(0, 65536);
+    if (!s) return false;
+    if (s.indexOf('\u0000') !== -1) return true;
+    var broken = (s.match(/�/g) || []).length;
+    return broken > 8 && broken / s.length > 0.01;
+  }
+  function explainNotWordFile(kind) {
+    var photo = kind === 'image' || kind === 'media';
+    openSheet('<h2>' + (photo ? '사진은 앱이 읽을 수 없어요' : '단어 파일이 아니에요') + '</h2>' +
+      '<p>' + (photo ? '앱에는 사진 속 글자를 읽는 기능이 없어요.' : 'Claude가 준 Day 파일이나, 한 줄에 \'단어 - 뜻\'으로 적은 목록만 가져올 수 있어요.') + '</p>' +
+      '<p>책 사진은 Claude에게 보내면 Day 파일로 바꿔 줘요. 직접 넣으려면 단어장 화면의 \'단어 추가\'나 \'붙여 넣어 추가\'를 써 주세요.</p>' +
+      '<div class="btns"><button class="btn primary" data-act="close-modal">알겠어요</button></div>');
+  }
   function importText(text, name, opts) {
     var obj;
+    if (looksBinary(text)) { explainNotWordFile('binary'); return; }
     try { obj = parseLoose(text); }
     catch (e) {
       var lines = parseLines(text);
       if (!lines.words.length) { toast('파일 내용을 읽을 수 없어요. Claude가 준 Day 파일이거나, 한 줄에 \'단어 - 뜻\' 형식인지 확인해 주세요.'); return; }
+      // 파일에서 읽은 줄 목록은 뜻 절반 이상에 한글이 있어야 단어 목록으로 본다 (다른 앱 파일이 단어로 들어가는 것을 막음)
+      if (opts && opts.file && lines.words.filter(function (x) { return /[가-힣]/.test(x.m); }).length * 2 < lines.words.length) { explainNotWordFile('text'); return; }
       var title = (opts && str(opts.title)) || listTitle();
       var same = values(DB.decks).filter(function (d) { return d.title.trim().toLowerCase() === title.trim().toLowerCase(); })[0];
       var r0 = importDay({ deck: { id: same ? same.id : 'list-' + hashStr(title), title: same ? same.title : title }, words: lines.words });
@@ -1512,12 +1540,18 @@
     },
     'word-delete': function (el) {
       var id = el.dataset.id;
-      confirmSheet('이 단어를 지울까요?', '지운 단어와 기록은 되돌릴 수 없어요.', '지우기', function () { delete DB.cards[id]; saveNow(); closeAllModals(); render(); toast('단어를 지웠어요.'); }, true);
+      confirmSheet('이 단어를 지울까요?', '지운 단어와 기록은 되돌릴 수 없어요.', '지우기', function () {
+        if (DB.cards[id]) refundNewToday([DB.cards[id]]);
+        delete DB.cards[id]; saveNow(); closeAllModals(); render(); toast('단어를 지웠어요.');
+      }, true);
     },
     'deck-delete': function (el) {
       var id = el.dataset.id, d = DB.decks[id];
-      confirmSheet(josa(d.title, '을/를') + ' 지울까요?', '이 Day의 단어와 진도가 모두 지워져요.', '지우기', function () {
-        cards().forEach(function (c) { if (c.deck === id) delete DB.cards[c.id]; });
+      var kind = d.day != null ? 'Day' : '단어장';
+      confirmSheet(josa(d.title, '을/를') + ' 지울까요?', '이 ' + kind + '의 단어와 진도가 모두 지워져요.', '지우기', function () {
+        var gone = cards().filter(function (c) { return c.deck === id; });
+        refundNewToday(gone);
+        gone.forEach(function (c) { delete DB.cards[c.id]; });
         delete DB.decks[id]; saveNow(); closeAllModals(); closeOverlay(); toast('지웠어요.');
       }, true);
     },
@@ -1739,8 +1773,11 @@
     if (evt === 'picked') {
       var text = Native.takePicked();
       if (!text) { if (arg) toast('빈 파일이에요.'); return; }
-      importText(text, arg);
-    } else if (evt === 'picked-fail') toast('파일을 열지 못했어요. 다른 파일을 골라 주세요.');
+      importText(text, arg, { file: true });
+    } else if (evt === 'picked-fail') {
+      if (/^(image|media|pdf|doc|binary)$/.test(arg || '')) explainNotWordFile(arg);
+      else toast('파일을 열지 못했어요. 다른 파일을 골라 주세요.');
+    }
     else if (evt === 'exported') {
       if (arg === 'ok' && exportKind === 'csv') toast('학습 기록 표를 저장했어요. 엑셀이나 구글 시트로 열 수 있어요.');
       else if (arg === 'ok') { DB.meta.lastBackupAt = Date.now(); saveNow(); render(); toast('백업 파일을 저장했어요.'); }

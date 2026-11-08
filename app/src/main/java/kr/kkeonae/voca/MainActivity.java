@@ -407,11 +407,30 @@ public class MainActivity extends Activity {
                 return;
             }
             Uri uri = data.getData();
+            String mime = null;
+            try {
+                mime = getContentResolver().getType(uri);
+            } catch (Exception ignored) {
+                mime = null;
+            }
+            String early = Storage.notWordFileKind(mime, null);
+            if (early != null) {
+                pickedText = null;
+                notifyJs("picked-fail", early);
+                return;
+            }
             try (InputStream in = getContentResolver().openInputStream(uri)) {
                 if (in == null) {
                     throw new Exception("no stream");
                 }
-                pickedText = Storage.readText(in, MAX_IMPORT_BYTES);
+                byte[] bytes = Storage.readBytes(in, MAX_IMPORT_BYTES);
+                String kind = Storage.notWordFileKind(null, bytes);
+                if (kind != null) {
+                    pickedText = null;
+                    notifyJs("picked-fail", kind);
+                    return;
+                }
+                pickedText = Storage.utf8(bytes);
                 notifyJs("picked", displayName(uri));
             } catch (Exception e) {
                 pickedText = null;
