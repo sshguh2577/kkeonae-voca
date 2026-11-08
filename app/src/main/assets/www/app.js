@@ -77,7 +77,7 @@
     }
     function webDownload(text, name) {
       try {
-        var blob = new Blob([text], { type: 'application/json' });
+        var blob = new Blob([text], { type: /\.csv$/i.test(name) ? 'text/csv' : 'application/json' });
         var a = document.createElement('a');
         a.href = URL.createObjectURL(blob); a.download = name;
         document.body.appendChild(a); a.click(); a.remove();
@@ -239,8 +239,10 @@
   function cards() { return values(DB.cards); }
   function hasCards() { for (var k in DB.cards) { if (!DB.cards[k].sus) return true; } return false; }
   function deckOrder(id) { var d = DB.decks[id]; return d && d.order != null ? d.order : 9999; }
+  function deckPaused(id) { var d = DB.decks[id]; return !!(d && d.paused); }
+  function isFreshReady(c) { return c.st === 0 && !c.sus && !deckPaused(c.deck); } // 잠시 멈춘 Day의 새 단어는 안 꺼낸다
   function newQueueCards() {
-    return cards().filter(function (c) { return c.st === 0 && !c.sus; }).sort(function (a, b) {
+    return cards().filter(isFreshReady).sort(function (a, b) {
       return (deckOrder(a.deck) - deckOrder(b.deck)) || ((a.ord || 0) - (b.ord || 0));
     });
   }
@@ -269,7 +271,7 @@
     var key = todayKey(), end = dayEndMs(key), rec = dayRec(key), s = DB.settings;
     var due = countDue(end);
     var newAvail = 0;
-    for (var k in DB.cards) { var c = DB.cards[k]; if (c.st === 0 && !c.sus) newAvail++; }
+    for (var k in DB.cards) { if (isFreshReady(DB.cards[k])) newAvail++; }
     var capSig = s.newPerDay + '|' + (s.autoReduce ? 1 : 0);
     if (rec.dueStart == null) rec.dueStart = due;
     if (rec.cap == null || rec.capSig !== capSig) { rec.cap = newCapFor(rec.dueStart); rec.capSig = capSig; }
@@ -446,10 +448,32 @@
     if (a !== -1 && b > a) return JSON.parse(t.slice(a, b + 1));
     throw new Error('parse');
   }
-  function importText(text, name) {
+  // '단어 - 뜻' 줄 목록 읽기: 줄마다 단어와 뜻 사이를 -, –, :, =, 탭으로 나누거나, 영어 뒤에 바로 한글을 써도 된다
+  function parseLines(text) {
+    var words = [], bad = 0;
+    String(text || '').split(/\r?\n/).forEach(function (line) {
+      var t = line.replace(/^\s*(?:[-*•·]|\d+[.)])\s*/, '').trim();
+      if (!t) return;
+      var m = t.match(/^([A-Za-z(][A-Za-z0-9'’()\/.,\- ]*?)\s*(?:\t|\s[-–—=:]\s?|\s?[:=]\s*|\s{2,})\s*(.+)$/) ||
+        t.match(/^([A-Za-z(][A-Za-z0-9'’()\/.,\- ]*?)\s+([~(（\[가-힣].*)$/);
+      if (m && m[1].trim() && m[2].trim()) words.push({ w: m[1].trim().replace(/’/g, "'"), m: m[2].trim() });
+      else bad++;
+    });
+    return { words: words, bad: bad };
+  }
+  function listTitle() { var d = new Date(); return '붙여 넣은 단어 ' + (d.getMonth() + 1) + '월 ' + d.getDate() + '일'; }
+  function importText(text, name, opts) {
     var obj;
     try { obj = parseLoose(text); }
-    catch (e) { toast('파일 내용을 읽을 수 없어요. Claude가 준 Day 파일(.json)인지 확인해 주세요.'); return; }
+    catch (e) {
+      var lines = parseLines(text);
+      if (!lines.words.length) { toast('파일 내용을 읽을 수 없어요. Claude가 준 Day 파일이거나, 한 줄에 \'단어 - 뜻\' 형식인지 확인해 주세요.'); return; }
+      var title = (opts && str(opts.title)) || listTitle();
+      var r0 = importDay({ deck: { id: 'list-' + hashStr(title), title: title }, words: lines.words });
+      saveNow(); closeAllModals(); render();
+      toast(josa(r0.deck.title, '을/를') + ' 만들었어요. 새 단어 ' + r0.added + '개' + (r0.updated ? ', 고친 단어 ' + r0.updated + '개' : '') + (lines.bad ? '. 못 읽은 줄 ' + lines.bad + '개' : '') + '.');
+      return;
+    }
     if (obj && obj.kind === 'kkeonae-backup' && obj.db) { confirmRestore(obj, name); return; }
     if (obj && obj.kind === 'kkeonae-patch') {
       var n = importPatch(obj); saveNow(); render();
@@ -793,6 +817,49 @@
     nextCard();
   }
 
+  /* 범위 연습: 복습 일정은 건드리지 않고 한 Day만 훑는다. 푼 문제는 출석에 들어간다 */
+  function startPractice(deckId, onlyIds) {
+    var now = Date.now();
+    var list = cards().filter(function (c) { return c.deck === deckId && !c.sus && (!onlyIds || onlyIds.indexOf(c.id) !== -1); });
+    if (!list.length) { toast('연습할 단어가 없어요.'); return; }
+    var seen = list.filter(function (c) { return c.st !== 0; }).sort(function (a, b) { return retrNow(a, now) - retrNow(b, now); });
+    var fresh = list.filter(function (c) { return c.st === 0; }).sort(function (a, b) { return (a.ord || 0) - (b.ord || 0); });
+    S = {
+      mode: 'practice', practice: true, deckId: deckId, startedAt: now, deadline: 0,
+      queue: seen.concat(fresh).map(function (c) { return c.id; }), pending: [],
+      cur: null, answered: 0, good: 0, again: 0, newSeen: 0, attendedNow: false, undo: null, timer: null,
+      retry: {}, missed: {}
+    };
+    openOverlay('study', '<div class="study" id="study"></div>');
+    nextCard();
+  }
+  function practiceGrade(g) {
+    var c = DB.cards[S.cur.id];
+    var now = Date.now();
+    var rec = todayPlan().rec;
+    S.undo = {
+      id: c.id, card: clone(c), rec: { a: rec.a, c: rec.c, n: rec.n, ms: rec.ms, att: !!rec.att, attAt: rec.attAt },
+      queue: S.queue.slice(), pending: [], retry: clone(S.retry), missed: clone(S.missed),
+      stats: { answered: S.answered, good: S.good, again: S.again, newSeen: S.newSeen, attendedNow: S.attendedNow },
+      cur: { id: S.cur.id, mode: S.cur.mode }
+    };
+    rec.a++; if (g >= 3) rec.c++;
+    rec.ms += Math.min(now - S.cur.shownAt, 90000);
+    S.answered++;
+    if (g >= 3) S.good++;
+    else {
+      S.again++; S.missed[c.id] = true; c.pw = (c.pw || 0) + 1; // 연습에서 틀린 횟수 (복습 기록과 따로 센다)
+      var r = S.retry[c.id] || 0;
+      if (r < 2) { S.retry[c.id] = r + 1; S.queue.splice(Math.min(3, S.queue.length), 0, c.id); }
+    }
+    var plan = todayPlan();
+    var justAttended = checkAttendance(plan);
+    saveSoon();
+    if (justAttended) { S.attendedNow = true; showBigStamp(plan.key); }
+    else sfx(g >= 3 ? 'good' : 'again');
+    nextCard();
+  }
+
   function takeNext() {
     var now = Date.now();
     S.pending.sort(function (a, b) { return a.due - b.due; });
@@ -815,7 +882,7 @@
     while (id && (!DB.cards[id] || DB.cards[id].sus)) id = takeNext();
     if (!id) { finishStudy(); return; }
     var c = DB.cards[id];
-    S.cur = { id: id, mode: chooseMode(c), revealed: false, shownAt: Date.now(), typed: null, verdict: null };
+    S.cur = { id: id, mode: S.practice ? 'recall' : chooseMode(c), revealed: false, shownAt: Date.now(), typed: null, verdict: null };
     renderStudy();
     if (DB.settings.autoSpeak && S.cur.mode === 'recall') speak(c.w);
   }
@@ -850,7 +917,7 @@
     var top = '<header class="study-top"><button class="icon-btn" data-act="study-close" aria-label="공부 그만하기">' + ICON.close + '</button>' +
       '<div class="progress" aria-hidden="true"><span id="study-progress"></span></div><span class="study-count" id="study-count"></span>' +
       '<button class="icon-btn" data-act="undo" aria-label="방금 답 되돌리기" ' + (S.undo ? '' : 'style="visibility:hidden"') + '>' + ICON.undo + '</button></header>';
-    var kicker = '<p class="card-kicker"><span>' + esc(deckTitle(c.deck)) + '</span>' + (isNew ? '<span class="badge new">새 단어</span>' : (isLeech(c) ? '<span class="badge">자주 틀림</span>' : '<span></span>')) + '</p>';
+    var kicker = '<p class="card-kicker"><span>' + esc(deckTitle(c.deck)) + '</span>' + (S.practice ? '<span class="badge">연습</span>' : isNew ? '<span class="badge new">새 단어</span>' : (isLeech(c) ? '<span class="badge">자주 틀림</span>' : '<span></span>')) + '</p>';
     var speakBtn = '<button class="icon-btn" data-act="speak" data-text="' + esc(c.w) + '" aria-label="발음 듣기">' + ICON.speak + '</button>';
     var body = '', actions = '';
     var answerBlock = '<div class="answer">' +
@@ -895,6 +962,9 @@
       }
     } else if (!cur.revealed) {
       actions = '<button class="btn primary tall wide" data-act="reveal">' + (cur.mode === 'cloze' ? '정답 보기' : '뜻 보기') + '</button><div class="under-actions"></div>';
+    } else if (S.practice) {
+      actions = '<div class="grade-row"><button class="btn graphite" data-act="grade" data-g="1">몰랐음<small>조금 뒤 다시</small></button>' +
+        '<button class="btn primary" data-act="grade" data-g="3">알았음<small>일정 그대로</small></button></div><div class="under-actions"></div>';
     } else {
       actions = '<div class="grade-row"><button class="btn graphite" data-act="grade" data-g="1">몰랐음<small>' + previewLabel(c, 1) + '</small></button>' +
         '<button class="btn primary" data-act="grade" data-g="3">알았음<small>' + previewLabel(c, 3) + '</small></button></div>' +
@@ -936,6 +1006,7 @@
 
   function grade(g) {
     if (!S || !S.cur) return;
+    if (S.practice) { practiceGrade(g); return; }
     var c = DB.cards[S.cur.id];
     var now = Date.now();
     var plan0 = todayPlan();
@@ -972,6 +1043,8 @@
     if (!u.rec.att) { delete rec.att; delete rec.attAt; }
     S.queue = u.queue; S.pending = u.pending;
     S.answered = u.stats.answered; S.good = u.stats.good; S.again = u.stats.again; S.newSeen = u.stats.newSeen; S.attendedNow = u.stats.attendedNow;
+    if (u.retry) S.retry = u.retry;
+    if (u.missed) S.missed = u.missed;
     // u.queue / u.pending는 다음 카드를 꺼내기 전 모습이라 그대로 되돌리면 된다
     S.cur ={ id: u.id, mode: u.cur.mode, revealed: false, shownAt: Date.now(), typed: null, verdict: null };
     S.undo = null;
@@ -997,6 +1070,7 @@
     saveNow();
     var s = S; S = null;
     if (!s.answered) { closeOverlay(); return; }
+    if (s.practice) { practiceResult(s); return; }
     var plan = todayPlan();
     var key = plan.key;
     var tomorrow = F.addDaysKey(key, 1);
@@ -1019,6 +1093,65 @@
     else if (remainToday > 0) html += '<button class="btn quiet wide" data-act="study">남은 카드도 하기</button>';
     html += '<button class="btn ' + (plan.rec.att || plan.restDay ? 'primary' : 'quiet') + ' wide" data-act="close-overlay">홈으로</button></div></div>';
     openOverlay('result', html);
+  }
+
+  function practiceResult(s) {
+    var plan = todayPlan(), key = plan.key, st = streakAt(key).count;
+    var missed = Object.keys(s.missed).filter(function (id) { return DB.cards[id]; });
+    state.lastMissed = { deck: s.deckId, ids: missed };
+    var html = '<div class="result"><h2>연습 ' + s.answered + '문제 했어요</h2>' +
+      '<p class="lead">알았음 ' + s.good + ', 몰랐음 ' + s.again + '. 복습 일정은 바뀌지 않았어요.</p>';
+    if (missed.length) {
+      html += '<ul class="miss-list">' + missed.slice(0, 12).map(function (id) { var c = DB.cards[id]; return '<li><b>' + esc(c.w) + '</b><span>' + esc(c.m) + '</span></li>'; }).join('') + '</ul>' +
+        (missed.length > 12 ? '<p class="hint">그 밖에 ' + (missed.length - 12) + '개 더 있어요.</p>' : '');
+    }
+    if (plan.rec.att) html += '<div class="result-stamp">' + sealSVG('출석', '', dayRot(key)) + '<p><strong>오늘 출석했어요</strong>' + (st > 1 ? st + '일 연속이에요.' : '내일도 도장을 이어 가요.') + '</p></div>';
+    else if (!plan.restDay) html += '<div class="result-stamp"><span class="seal-empty today" style="width:64px;height:64px;flex:none"></span><p><strong>출석까지 ' + Math.max(0, DB.settings.minAnswers - plan.rec.a) + '문제 남았어요</strong>연습한 문제도 출석에 들어가요.</p></div>';
+    html += '<div class="spacer"></div><div class="btns">' +
+      (missed.length ? '<button class="btn primary wide" data-act="practice-missed">틀린 ' + missed.length + '개만 다시</button>' : '') +
+      '<button class="btn quiet wide" data-act="practice" data-id="' + esc(s.deckId) + '">처음부터 다시</button>' +
+      '<button class="btn ' + (missed.length ? 'text' : 'primary') + ' wide" data-act="close-overlay">홈으로</button></div></div>';
+    openOverlay('result', html);
+  }
+
+  /* ================= 학습 기록 표 (엑셀에서 열 수 있는 CSV) ================= */
+  function csvCell(v) { v = v == null ? '' : String(v); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+  function studyRows() {
+    var now = Date.now();
+    var stName = { 'new': '새 단어', learn: '익히는 중', 'long': '머리에 남음', sus: '보관' };
+    var rows = cards().map(function (c) {
+      var h = c.h || [], last = h[h.length - 1];
+      var seen = c.st !== 0;
+      return {
+        c: c, deck: deckTitle(c.deck), order: deckOrder(c.deck), seen: seen, fails: fails(c),
+        r: c.st === 2 ? Math.round(retrNow(c, now) * 100) : null,
+        cells: [deckTitle(c.deck), c.w, c.m, stName[stage(c)], h.length, fails(c), c.pw || 0,
+          last ? (last[1] >= 3 ? '알았음' : '몰랐음') : '',
+          c.last ? F.dayKey(c.last, dsh()) : '',
+          c.st === 2 ? Math.round(retrNow(c, now) * 100) : '',
+          seen && !c.sus ? F.dayKey(c.due, dsh()) : '']
+      };
+    });
+    rows.sort(function (a, b) {
+      if (a.seen !== b.seen) return a.seen ? -1 : 1;
+      if (a.seen) return (b.fails - a.fails) || ((a.r == null ? 101 : a.r) - (b.r == null ? 101 : b.r));
+      return (a.order - b.order) || ((a.c.ord || 0) - (b.c.ord || 0));
+    });
+    return rows;
+  }
+  function studyCsv() {
+    var head = ['Day', '단어', '뜻', '상태', '본 횟수', '틀린 횟수', '연습에서 틀림', '마지막 결과', '마지막으로 본 날', '지금 기억할 확률(%)', '다음 복습일'];
+    var lines = [head].concat(studyRows().map(function (r) { return r.cells; }));
+    return '\uFEFF' + lines.map(function (row) { return row.map(csvCell).join(','); }).join('\r\n') + '\r\n';
+  }
+  function csvName() { return 'kkeonae-study-' + todayKey() + '.csv'; }
+  var exportKind = 'backup';
+  function openExportSheet() {
+    var n = cards().filter(function (c) { return c.st !== 0; }).length;
+    openSheet('<h2>학습 기록 표</h2><p>단어마다 본 횟수, 틀린 횟수, 마지막 결과, 지금 기억할 확률을 엑셀에서 열리는 표(CSV)로 내보내요. 많이 틀린 단어가 맨 위에 와요.</p>' +
+      '<p class="hint">배운 단어 ' + n + '개, 전체 ' + cards().length + '개</p>' +
+      '<div class="btns"><button class="btn primary wide" data-act="csv-share">카톡·드라이브로 보내기</button><button class="btn quiet wide" data-act="csv-save">파일로 저장</button>' +
+      '<button class="btn text" data-act="close-modal">닫기</button></div>');
   }
 
   /* ================= 출석 달력 ================= */
@@ -1145,10 +1278,12 @@
     html += '<section class="section"><h2>Day별 진도</h2><div class="legend"><span><i class="seg-long"></i>머리에 남음</span><span><i class="seg-learn"></i>익히는 중</span><span><i class="seg-new"></i>새 단어</span></div><ul class="deck-list">';
     decks.forEach(function (d) {
       var s = deckStats(d.id);
-      html += '<li class="deck-item"><button data-act="deck" data-id="' + esc(d.id) + '"><span class="deck-top"><span class="deck-tab">' + esc(d.title) + '</span><span class="deck-count">' + s.total + '개</span></span>' +
+      var flag = d.paused ? '<span class="badge new">멈춤</span> ' : d.first ? '<span class="badge">먼저</span> ' : '';
+      html += '<li class="deck-item"><button data-act="deck" data-id="' + esc(d.id) + '"><span class="deck-top"><span class="deck-tab">' + esc(d.title) + '</span><span class="deck-count">' + flag + s.total + '개</span></span>' +
         segbar(s) + '<span class="deck-nums">' + deckNums(s) + '</span></button></li>';
     });
-    html += '</ul></section><div class="btn-list"><button class="btn quiet wide" data-act="import-file">Day 파일 가져오기</button><button class="btn text" data-act="paste-import">붙여 넣어 가져오기</button></div>';
+    html += '</ul></section><div class="btn-list"><button class="btn quiet wide" data-act="import-file">Day 파일 가져오기</button><button class="btn text" data-act="paste-import">붙여 넣어 가져오기</button>' +
+      '<button class="btn text" data-act="export-study">학습 기록 표 내보내기</button></div>';
     return html;
   }
   function renderDeckOverlay() {
@@ -1158,6 +1293,11 @@
     var s = deckStats(d.id);
     var html = '<div class="view" style="padding-bottom:28px"><div class="cal-head" style="grid-template-columns:44px 1fr 44px"><button class="icon-btn" data-act="close-overlay" aria-label="뒤로">' + ICON.back + '</button><h2>' + esc(d.title) + '</h2><span></span></div>' +
       segbar(s) + '<p class="deck-nums" style="margin:8px 0 0">' + deckNums(s) + '</p>' +
+      (d.paused ? '<p class="deck-flag">새 단어를 잠시 멈췄어요. 이미 배운 단어 복습은 그대로 나와요.</p>' : '') +
+      '<div class="deck-actions"><button class="btn primary wide" data-act="practice" data-id="' + esc(d.id) + '">이 Day 연습하기</button>' +
+      '<p class="hint">복습 일정은 그대로 두고 이 Day만 훑어봐요. 푼 문제는 출석에 들어가요.</p>' +
+      '<div class="pair"><button class="btn quiet" data-act="deck-first" data-id="' + esc(d.id) + '">' + (d.first ? '원래 순서로' : '새 단어 먼저 하기') + '</button>' +
+      '<button class="btn quiet" data-act="deck-pause" data-id="' + esc(d.id) + '">' + (d.paused ? '새 단어 다시 시작' : '새 단어 멈추기') + '</button></div></div>' +
       '<ul class="word-list" style="margin-top:12px">' + list.map(wordRow).join('') + '</ul>' +
       '<div class="btn-list"><button class="btn danger-text" data-act="deck-delete" data-id="' + esc(d.id) + '">이 Day 지우기</button></div></div>';
     overlay.innerHTML = html;
@@ -1253,6 +1393,7 @@
       '<button class="btn quiet wide" data-act="backup-save">파일로 저장</button>' +
       '<button class="btn quiet wide" data-act="import-file">백업·Day 파일 불러오기</button>' +
       '<button class="btn text" data-act="paste-import">붙여 넣어 가져오기</button>' +
+      '<button class="btn text" data-act="export-study">학습 기록 표 내보내기</button>' +
       (Native.has ? '<button class="btn text" data-act="snapshots">자동 저장본에서 되살리기</button>' : '') + '</div>' +
       '<p class="hint">새 폰에서는 앱을 설치한 뒤 이 화면에서 백업 파일을 불러오면 출석, 진도, 단어가 모두 그대로 옮겨져요.</p></section>';
 
@@ -1364,14 +1505,45 @@
     'exact-alarm': function () { Native.openExactAlarm(); },
     'battery': function () { Native.requestBattery(); },
     'notif-test': function () { saveNow(); Native.testNotif(); toast('알림을 보냈어요. 안 오면 알림 허용을 확인해 주세요.'); },
-    'backup-save': function () { Native.exportFile(backupPayload(), backupName()); },
-    'backup-share': function () { Native.shareFile(backupPayload(), backupName()); },
+    'backup-save': function () { exportKind = 'backup'; Native.exportFile(backupPayload(), backupName()); },
+    'backup-share': function () { exportKind = 'backup'; Native.shareFile(backupPayload(), backupName()); },
+    'export-study': function () { openExportSheet(); },
+    'csv-save': function () { exportKind = 'csv'; closeAllModals(); Native.exportFile(studyCsv(), csvName()); },
+    'csv-share': function () { exportKind = 'csv'; closeAllModals(); Native.shareFile(studyCsv(), csvName()); },
+    'practice': function (el) { closeAllModals(); startPractice(el.dataset.id); },
+    'practice-missed': function () { var m = state.lastMissed; if (m && m.ids.length) startPractice(m.deck, m.ids); },
+    'deck-pause': function (el) {
+      var d = DB.decks[el.dataset.id]; if (!d) return;
+      d.paused = !d.paused; if (!d.paused) delete d.paused;
+      saveNow(); renderDeckOverlay();
+      toast(d.paused ? josa(d.title, '은/는') + ' 새 단어를 멈췄어요. 복습은 그대로 나와요.' : d.title + '의' + ' 새 단어를 다시 꺼내요.');
+    },
+    'deck-first': function (el) {
+      var d = DB.decks[el.dataset.id]; if (!d) return;
+      var others = values(DB.decks).filter(function (x) { return x.id !== d.id; });
+      if (!d.first) {
+        var min = others.reduce(function (m, x) { return Math.min(m, x.order != null ? x.order : 9999); }, 9999);
+        d.order = Math.min(min, d.order != null ? d.order : 9999) - 1; d.first = true;
+      } else {
+        var max = others.reduce(function (m, x) { return Math.max(m, x.first ? 0 : (x.order || 0)); }, 0);
+        d.order = d.day != null ? d.day : max + 1; delete d.first;
+      }
+      saveNow(); renderDeckOverlay();
+      toast(d.first ? d.title + '의' + ' 새 단어를 가장 먼저 꺼내요.' : josa(d.title, '을/를') + ' 원래 순서로 돌렸어요.');
+    },
     'import-file': function () { Native.pickFile(); },
     'paste-import': function () {
-      openSheet('<h2>붙여 넣어 가져오기</h2><p>Claude가 준 Day 내용이나 백업 내용을 통째로 붙여 넣으세요.</p><textarea data-autofocus="1" id="paste-box" placeholder="{ &quot;kind&quot;: &quot;kkeonae-day&quot;, ... }"></textarea>' +
+      openSheet('<h2>붙여 넣어 가져오기</h2><p>Claude가 준 Day 내용이나 백업 내용을 통째로 붙여 넣으세요. 직접 적을 때는 한 줄에 하나씩 \'단어 - 뜻\'으로 쓰면 돼요.</p>' +
+        '<textarea data-autofocus="1" id="paste-box" placeholder="stack - 쌓다&#10;kneel - 무릎을 꿇다"></textarea>' +
+        '<label class="field">이름 (줄 목록일 때만)<input id="paste-title" type="text" placeholder="' + esc(listTitle()) + '"></label>' +
         '<div class="btns two"><button class="btn quiet" data-act="close-modal">취소</button><button class="btn primary" data-act="paste-go">가져오기</button></div>');
     },
-    'paste-go': function () { var t = document.getElementById('paste-box').value; if (!t.trim()) { toast('붙여 넣은 내용이 없어요.'); return; } importText(t, '붙여 넣기'); },
+    'paste-go': function () {
+      var t = document.getElementById('paste-box').value;
+      if (!t.trim()) { toast('붙여 넣은 내용이 없어요.'); return; }
+      var ti = document.getElementById('paste-title');
+      importText(t, '붙여 넣기', { title: ti ? ti.value : '' });
+    },
     'do-restore': function () { var ctx = topCtx(); if (ctx.restore) doRestore(ctx.restore); },
     'snapshots': function () { openSnapshots(); },
     'snap-pick': function (el) {
@@ -1468,10 +1640,12 @@
       importText(text, arg);
     } else if (evt === 'picked-fail') toast('파일을 열지 못했어요. 다른 파일을 골라 주세요.');
     else if (evt === 'exported') {
-      if (arg === 'ok') { DB.meta.lastBackupAt = Date.now(); saveNow(); render(); toast('백업 파일을 저장했어요.'); }
+      if (arg === 'ok' && exportKind === 'csv') toast('학습 기록 표를 저장했어요. 엑셀이나 구글 시트로 열 수 있어요.');
+      else if (arg === 'ok') { DB.meta.lastBackupAt = Date.now(); saveNow(); render(); toast('백업 파일을 저장했어요.'); }
       else if (arg === 'fail') toast('저장하지 못했어요. 다른 위치를 골라 주세요.');
     } else if (evt === 'shared') {
-      if (arg === 'ok') { DB.meta.lastBackupAt = Date.now(); saveNow(); render(); toast('보낼 곳을 골라 주세요. 카톡 나에게 보내기나 구글 드라이브가 좋아요.'); }
+      if (arg === 'ok' && exportKind === 'csv') toast('보낼 곳을 골라 주세요. Claude에게 보내면 자주 틀린 단어를 같이 볼 수 있어요.');
+      else if (arg === 'ok') { DB.meta.lastBackupAt = Date.now(); saveNow(); render(); toast('보낼 곳을 골라 주세요. 카톡 나에게 보내기나 구글 드라이브가 좋아요.'); }
       else toast('보내기 화면을 열지 못했어요. 파일로 저장을 써 주세요.');
     } else if (evt === 'notif-permission') { closeAllModals(); render(); }
     else if (evt === 'resume') {
@@ -1497,6 +1671,6 @@
   maybeWelcome();
 
   // 테스트용 접근점
-  window.__kv = { get db() { return DB; }, todayPlan: todayPlan, streakAt: streakAt, buildSummary: buildSummary, importText: importText, checkTyped: checkTyped, clozeParts: clozeParts,
+  window.__kv = { get db() { return DB; }, parseLines: parseLines, studyCsv: studyCsv, newQueueCards: newQueueCards, todayPlan: todayPlan, streakAt: streakAt, buildSummary: buildSummary, importText: importText, checkTyped: checkTyped, clozeParts: clozeParts,
     isRestDay: isRestDay, passWindow: passWindow, reviewStats: reviewStats, josa: josa, rebalanceRestDays: rebalanceRestDays };
 })();

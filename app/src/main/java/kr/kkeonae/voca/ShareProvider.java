@@ -67,7 +67,7 @@ public class ShareProvider extends ContentProvider {
 
     @Override
     public String getType(Uri uri) {
-        return "application/json";
+        return MainActivity.mimeFor(uri.getLastPathSegment());
     }
 
     @Override

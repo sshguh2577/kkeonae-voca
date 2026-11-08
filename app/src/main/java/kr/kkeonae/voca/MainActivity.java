@@ -149,11 +149,16 @@ public class MainActivity extends Activity {
     }
 
     /* ---------- 파일 저장·공유·불러오기 ---------- */
+    /** 확장자로 파일 종류를 정한다 (.csv = 학습 기록 표, 그 밖 = 백업·Day 파일). */
+    static String mimeFor(String name) {
+        return name != null && name.toLowerCase(java.util.Locale.ROOT).endsWith(".csv") ? "text/csv" : "application/json";
+    }
+
     private void startExport(String text, String name) {
         pendingExport = text;
         Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType("application/json");
+        i.setType(mimeFor(name));
         i.putExtra(Intent.EXTRA_TITLE, name);
         try {
             startActivityForResult(i, REQ_EXPORT);
@@ -180,12 +185,12 @@ public class MainActivity extends Activity {
             }
             Uri uri = Uri.parse("content://" + ShareProvider.AUTHORITY + "/" + Uri.encode(safe));
             Intent send = new Intent(Intent.ACTION_SEND);
-            send.setType("application/json");
+            send.setType(mimeFor(safe));
             send.putExtra(Intent.EXTRA_STREAM, uri);
             send.putExtra(Intent.EXTRA_SUBJECT, safe);
             send.setClipData(ClipData.newRawUri(safe, uri));
             send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            startActivity(Intent.createChooser(send, "백업 파일 보내기"));
+            startActivity(Intent.createChooser(send, safe.endsWith(".csv") ? "학습 기록 보내기" : "백업 파일 보내기"));
             notifyJs("shared", "ok");
         } catch (Exception e) {
             notifyJs("shared", "fail");

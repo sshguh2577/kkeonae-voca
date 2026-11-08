@@ -428,3 +428,13 @@ button { cursor: pointer; }
 .overlay-open .toast { top: 16px; bottom: auto; transform: translateX(-50%) translateY(-20px); }
 .overlay-open .toast.show { transform: translateX(-50%) translateY(0); }
 .today-total.word { font-size: 25px; }
+
+/* ---------- Day 화면: 연습·순서·멈춤 ---------- */
+.deck-actions { display: grid; gap: 8px; margin: 16px 0 4px; }
+.deck-actions .hint { margin: 0 0 4px; }
+.deck-actions .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.deck-flag { margin: 10px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--blue-wash); color: var(--ink-2); font-size: 14px; }
+.miss-list { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.miss-list li { display: flex; gap: 10px; align-items: baseline; font-size: 15px; }
+.miss-list b { min-width: 7.5em; color: var(--ink); }
+.miss-list span { color: var(--ink-2); }
