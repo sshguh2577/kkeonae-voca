@@ -100,7 +100,7 @@ button { cursor: pointer; }
 .tabs {
   position: fixed; left: 0; right: 0; bottom: 0;
   height: var(--tab-h);
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(5, 1fr);
   background: var(--desk);
   border-top: 1px solid var(--line);
   z-index: 20;
@@ -452,3 +452,14 @@ button { cursor: pointer; }
 .song-info { margin: 4px 0 10px; color: var(--ink-3); font-size: 14px; }
 .song-plan { margin: 0; font-size: 15px; font-weight: 700; color: var(--ink); }
 .song-new { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 14px; color: var(--ink-2); }
+/* 1.0.8 전공 칸 · 노래 탭 · 출석 전환 */
+.major-home { margin: 30px 0 0; padding: 18px 0 0; border-top: 1px solid var(--line); }
+.major-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 0 0 10px; }
+.major-title { font-size: 19px; font-weight: 800; margin: 0; letter-spacing: -.01em; }
+.major-streak { margin: 0; font-size: 15px; color: var(--ink-2); }
+.major-streak strong { font-size: 19px; font-weight: 800; color: var(--ink); margin-right: 2px; }
+.major-home .week { margin: 0 0 14px; }
+.major-card { margin: 0; }
+.major-home .btn-list { margin-top: 14px; }
+.cal-track { margin: 0 0 14px; }
+.cal-track button { padding: 7px 18px; }

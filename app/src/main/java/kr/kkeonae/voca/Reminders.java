@@ -179,16 +179,76 @@ final class Reminders {
         return best == null ? 0 : map.optInt(best, 0);
     }
 
+    /** 갈래 하나(토익 또는 전공)의 오늘 남은 양. 앱이 summary.json에 날짜별로 적어 둔다. */
+    private static final class Track {
+        int due;
+        int fresh;
+        int streak;
+        int goal;
+
+        int total() {
+            return due + fresh;
+        }
+
+        /** 이만큼 풀면 도장: 기준 문제 수, 남은 카드가 더 적으면 남은 카드를 다 끝낼 때 */
+        int need() {
+            return Math.max(1, Math.min(goal, total()));
+        }
+    }
+
+    private static Track track(JSONObject t, String today, int defGoal) {
+        Track r = new Track();
+        if (t == null) {
+            return r;
+        }
+        r.due = valueFor(t.optJSONObject("dueBy"), today, true);
+        r.fresh = valueFor(t.optJSONObject("newBy"), today, false);
+        r.streak = valueFor(t.optJSONObject("streakBy"), today, false);
+        r.goal = t.optInt("minAnswers", defGoal);
+        return r;
+    }
+
+    private static String streakText(Track t, Track m) {
+        if (t.streak > 0 && m.streak > 0) {
+            return "토익 " + t.streak + "일, 전공 " + m.streak + "일 연속 출석 중이에요.";
+        }
+        if (t.streak > 0) {
+            return "토익 " + t.streak + "일 연속 출석 중이에요.";
+        }
+        if (m.streak > 0) {
+            return "전공 " + m.streak + "일 연속 출석 중이에요.";
+        }
+        return "";
+    }
+
+    private static void appendBackupNote(StringBuilder body, JSONObject s, long now, boolean test) {
+        long lastBackup = s.optLong("lastBackupAt", 0);
+        Calendar cal = Calendar.getInstance();
+        boolean sunday = cal.get(Calendar.DAY_OF_WEEK) == Calendar.SUNDAY;
+        if ((sunday || test) && now - lastBackup > 7 * DAY) {
+            body.append("\n백업한 지 오래됐어요. 설정에서 백업 파일을 폰 밖에 하나 두세요.");
+        }
+    }
+
     static void show(Context c, int slot, JSONObject s, boolean test) {
         ensureChannel(c);
-        if (!s.optBoolean("hasCards", false) && !test) {
+        // 1.0.8부터 전공 갈래가 따로 있다. 전공 카드가 없으면 major가 없고, 예전과 똑같이 토익만 알린다
+        boolean hasT = s.optBoolean("hasCards", false);
+        JSONObject mj = s.optJSONObject("major");
+        boolean hasM = mj != null;
+        if (!hasT && !hasM && !test) {
             return;
         }
         int dsh = s.optInt("dayStartHour", 4);
         long now = System.currentTimeMillis();
         String today = dayKey(now, dsh);
-        if (contains(s.optJSONArray("attended"), today) && !test) {
-            return;
+        boolean needT = hasT && !contains(s.optJSONArray("attended"), today);
+        boolean needM = hasM && !contains(mj.optJSONArray("attended"), today);
+        if (test) {
+            needT = hasT || !hasM;
+            needM = hasM;
+        } else if (!needT && !needM) {
+            return; // 토익도 전공도 출석했으면 알리지 않는다
         }
         // 쉬는 요일에는 알림을 보내지 않는다. 앱이 30일치 쉬는 날을 적어 두고,
         // 앱을 30일 넘게 안 열었으면 요일 설정으로 판단한다.
@@ -202,21 +262,78 @@ final class Reminders {
         if (restDay && !test) {
             return;
         }
-        int due = valueFor(s.optJSONObject("dueBy"), today, true);
-        int fresh = valueFor(s.optJSONObject("newBy"), today, false);
-        int streak = valueFor(s.optJSONObject("streakBy"), today, false);
-        int goal = s.optInt("minAnswers", 20);
+        Track t = needT ? track(s, today, 20) : new Track();
+        Track m = needM ? track(mj, today, 10) : new Track();
+        int due = t.due;
+        int fresh = t.fresh;
+        int streak = t.streak;
+        int goal = t.goal;
         int total = due + fresh;
         // 앱이 최근 기록으로 잰 한 장당 시간(1.0.6부터). 없으면 예전 기본값(복습 8초, 새 단어 25초)
         long revMs = s.optLong("revMs", 8000);
         long newMs = s.optLong("newMs", 25000);
         if (revMs <= 0) revMs = 8000;
         if (newMs <= 0) newMs = 25000;
-        int minutes = (int) Math.max(1, Math.round((due * revMs + fresh * newMs) / 60000.0));
+        int minutes = (int) Math.max(1, Math.round(((due + m.due) * revMs + (fresh + m.fresh) * newMs) / 60000.0));
 
         String title;
         StringBuilder body = new StringBuilder();
-        if (slot == 1) {
+        if (slot == 1 && needM) {
+            if (!needT) {
+                if (m.total() == 0) {
+                    title = "오늘 전공은 쉬어 가는 날이에요";
+                    body.append("할 전공 카드가 없어요. 앱을 한 번 열면 전공 출석으로 쳐 줘요.");
+                } else {
+                    title = "오늘 꺼낼 전공 카드 " + m.total() + "장";
+                    body.append("복습 ").append(m.due).append("장, 새 단어 ").append(m.fresh)
+                            .append("장이에요. 약 ").append(minutes).append("분 걸려요.");
+                    if (m.streak > 0) {
+                        body.append(" 지금 전공 ").append(m.streak).append("일 연속 출석 중이에요.");
+                    }
+                }
+            } else if (total + m.total() == 0) {
+                title = "오늘은 쉬어 가는 날이에요";
+                body.append("토익도 전공도 할 카드가 없어요. 앱을 한 번 열면 둘 다 출석으로 쳐 줘요.");
+            } else {
+                title = "오늘 꺼낼 카드: 토익 " + total + "장, 전공 " + m.total() + "장";
+                body.append(total == 0 ? "토익: 할 카드 없음 (앱을 열면 출석)"
+                        : "토익: 복습 " + due + "장, 새 단어 " + fresh + "장").append('\n');
+                body.append(m.total() == 0 ? "전공: 할 카드 없음 (앱을 열면 출석)"
+                        : "전공: 복습 " + m.due + "장, 새 단어 " + m.fresh + "장").append('\n');
+                body.append("합쳐서 약 ").append(minutes).append("분 걸려요.");
+                String st = streakText(t, m);
+                if (!st.isEmpty()) {
+                    body.append(' ').append(st);
+                }
+            }
+            appendBackupNote(body, s, now, test);
+        } else if (slot != 1 && needM) {
+            long left = nextDayStart(now, dsh) - now;
+            int hours = (int) Math.max(1, Math.ceil(left / (double) HOUR));
+            if (!needT) {
+                if (m.total() == 0) {
+                    title = "앱을 한 번 열어 주세요";
+                    body.append("오늘은 할 전공 카드가 없어서 열기만 해도 전공 출석이에요.");
+                } else {
+                    title = "전공 출석 마감까지 " + hours + "시간 남았어요";
+                    if (m.streak > 0) {
+                        body.append("전공 ").append(m.streak).append("일 연속 출석을 이어 가요. ");
+                    }
+                    body.append("전공 ").append(m.need()).append("문제만 풀면 오늘 전공 도장을 받아요.");
+                }
+            } else if (total + m.total() == 0) {
+                title = "앱을 한 번 열어 주세요";
+                body.append("오늘은 할 카드가 없어서 열기만 해도 토익과 전공 모두 출석이에요.");
+            } else {
+                title = "출석 마감까지 " + hours + "시간 남았어요";
+                body.append(total == 0 ? "토익: 앱을 열기만 해도 출석" : "토익: " + t.need() + "문제 풀면 도장").append('\n');
+                body.append(m.total() == 0 ? "전공: 앱을 열기만 해도 출석" : "전공: " + m.need() + "문제 풀면 도장");
+                String st = streakText(t, m);
+                if (!st.isEmpty()) {
+                    body.append('\n').append(st);
+                }
+            }
+        } else if (slot == 1) {
             if (total == 0) {
                 title = "오늘은 쉬어 가는 날이에요";
                 body.append("복습할 카드가 없어요. 앱을 한 번 열면 출석으로 쳐 줘요.");
@@ -228,12 +345,7 @@ final class Reminders {
                     body.append(" 지금 ").append(streak).append("일 연속 출석 중이에요.");
                 }
             }
-            long lastBackup = s.optLong("lastBackupAt", 0);
-            Calendar cal = Calendar.getInstance();
-            boolean sunday = cal.get(Calendar.DAY_OF_WEEK) == Calendar.SUNDAY;
-            if ((sunday || test) && now - lastBackup > 7 * DAY) {
-                body.append("\n백업한 지 오래됐어요. 설정에서 백업 파일을 폰 밖에 하나 두세요.");
-            }
+            appendBackupNote(body, s, now, test);
         } else {
             long left = nextDayStart(now, dsh) - now;
             int hours = (int) Math.max(1, Math.ceil(left / (double) HOUR));
