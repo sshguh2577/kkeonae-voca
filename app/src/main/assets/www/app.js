@@ -18,7 +18,8 @@
     sound: true,
     autoSpeak: false,
     shortMinutes: 5,
-    restDows: [6] // 쉬는 요일 (0 일요일 ~ 6 토요일)
+    restDows: [6], // 쉬는 요일 (0 일요일 ~ 6 토요일)
+    songNew: 10 // 노래 단어장 한 번에 꺼낼 새 단어 수
   };
   var PASS_ANCHOR = '2026-01-04'; // 일요일. 휴식권은 이날부터 2주 단위로 1장
   var PASS_DAYS = 14;
@@ -251,10 +252,13 @@
 
   /* ================= 카드 ================= */
   function cards() { return values(DB.cards); }
-  function hasCards() { for (var k in DB.cards) { if (!DB.cards[k].sus) return true; } return false; }
+  // 노래 단어장(free): 복습 일정은 쓰지만 오늘 할 일·출석·알림·기억률과 따로, 하고 싶을 때만 공부한다
+  function isFreeDeck(id) { var d = DB.decks[id]; return !!(d && d.free); }
+  function inDaily(c) { return !isFreeDeck(c.deck); }
+  function hasCards() { for (var k in DB.cards) { var c = DB.cards[k]; if (!c.sus && inDaily(c)) return true; } return false; }
   function deckOrder(id) { var d = DB.decks[id]; return d && d.order != null ? d.order : 9999; }
   function deckPaused(id) { var d = DB.decks[id]; return !!(d && d.paused); }
-  function isFreshReady(c) { return c.st === 0 && !c.sus && !deckPaused(c.deck); } // 잠시 멈춘 Day의 새 단어는 안 꺼낸다
+  function isFreshReady(c) { return c.st === 0 && !c.sus && !deckPaused(c.deck) && inDaily(c); } // 잠시 멈춘 Day의 새 단어는 안 꺼낸다
   function newQueueCards() {
     return cards().filter(isFreshReady).sort(function (a, b) {
       return (deckOrder(a.deck) - deckOrder(b.deck)) || ((a.ord || 0) - (b.ord || 0));
@@ -278,7 +282,7 @@
   }
   function countDue(endMs) {
     var n = 0;
-    for (var k in DB.cards) { var c = DB.cards[k]; if (!c.sus && c.st !== 0 && c.due < endMs) n++; }
+    for (var k in DB.cards) { var c = DB.cards[k]; if (!c.sus && c.st !== 0 && c.due < endMs && inDaily(c)) n++; }
     return n;
   }
   function todayPlan() {
@@ -299,7 +303,7 @@
     var key = todayKey(), rec = DB.days[key];
     if (!rec || !rec.n) return 0;
     var start = F.dayStartOfKey(key, dsh()), n = 0;
-    list.forEach(function (c) { (c.h || []).forEach(function (e) { if (e[3] === 0 && e[0] * 1000 >= start) n++; }); });
+    list.forEach(function (c) { if (!inDaily(c)) return; (c.h || []).forEach(function (e) { if (e[3] === 0 && e[0] * 1000 >= start) n++; }); });
     if (n) rec.n = Math.max(0, rec.n - n);
     return n;
   }
@@ -312,6 +316,7 @@
     var fromMs = F.dayStartOfKey(from, d0);
     var byDay = {};
     cards().forEach(function (c) {
+      if (!inDaily(c)) return; // 노래 단어 시간은 따로 센다
       var h = c.h || [];
       for (var i = h.length - 1; i >= 0; i--) { // 기록은 시간순이라 2주보다 오래된 줄에서 멈춘다 (저장할 때마다 불려서 가볍게)
         var x = h[i], t = x[0] * 1000;
@@ -388,7 +393,7 @@
     var s = DB.settings, key = todayKey(), now = Date.now();
     var perDay = {}, todayDue = 0, end = dayEndMs(key);
     cards().forEach(function (c) {
-      if (c.sus || c.st === 0) return;
+      if (c.sus || c.st === 0 || !inDaily(c)) return;
       if (c.due < end) { todayDue++; return; }
       var k = F.dayKey(c.due, s.dayStartHour);
       perDay[k] = (perDay[k] || 0) + 1;
@@ -428,6 +433,7 @@
     var out = { total: 0, good: 0, byDay: {} };
     var d0 = dsh();
     cards().forEach(function (c) {
+      if (!inDaily(c)) return;
       (c.h || []).forEach(function (x) {
         if (x[3] !== 2) return;
         var k = F.dayKey(x[0] * 1000, d0);
@@ -469,11 +475,13 @@
     var hasDay = dayNum != null && dayNum !== '' && !isNaN(+dayNum);
     var deckId = String(info.id || obj.deckId || (hasDay ? 'day-' + pad2(+dayNum) : 'deck-' + Date.now()));
     var title = info.title || obj.title || (hasDay ? 'Day ' + pad2(+dayNum) : '가져온 단어');
+    var free = !!(obj.kind === 'kkeonae-song' || info.free);
     var deck = DB.decks[deckId];
     if (!deck) {
       var maxOrder = 0; values(DB.decks).forEach(function (d) { if (d.order > maxOrder) maxOrder = d.order; });
-      deck = DB.decks[deckId] = { id: deckId, title: title, day: hasDay ? +dayNum : null, order: hasDay ? +dayNum : maxOrder + 1, addedAt: Date.now() };
+      deck = DB.decks[deckId] = { id: deckId, title: title, day: hasDay && !free ? +dayNum : null, order: hasDay && !free ? +dayNum : maxOrder + 1, addedAt: Date.now() };
     } else { deck.title = title; }
+    if (free) { deck.free = true; if (info.song) deck.song = str(info.song); if (info.artist) deck.artist = str(info.artist); }
     var byWord = {}, baseOrd = 0;
     cards().forEach(function (c) { if (c.deck === deckId) { byWord[c.w.toLowerCase()] = c; baseOrd = Math.max(baseOrd, (c.ord || 0) + 1); } });
     var added = 0, updated = 0;
@@ -569,6 +577,7 @@
       saveNow(); closeAllModals(); render();
       var msg = josa(r.deck.title, '을/를') + ' 가져왔어요. 새 단어 ' + r.added + '개';
       if (r.updated) msg += ', 고친 단어 ' + r.updated + '개';
+      if (r.deck.free) msg += '. 노래 단어장이라 오늘 할 일과 따로, 단어 탭에서 원할 때 공부해요';
       toast(msg + '.');
     } catch (e) {
       toast('단어 목록을 찾지 못했어요. Claude가 준 Day 파일인지 확인해 주세요.');
@@ -808,7 +817,7 @@
         '<p class="meter-label">출석까지 ' + goal + '문제 중 ' + Math.min(goal, plan.rec.a) + '문제</p>';
     }
     var counts = { new: 0, learn: 0, long: 0 };
-    cards().forEach(function (c) { var s = stage(c); if (counts[s] != null) counts[s]++; });
+    cards().forEach(function (c) { if (!inDaily(c)) return; var s = stage(c); if (counts[s] != null) counts[s]++; });
     var totalWords = counts.new + counts.learn + counts.long;
     var canStudy = total > 0 || hasPendingLearning();
     var mins = DB.settings.shortMinutes;
@@ -821,7 +830,7 @@
       '<p class="today-desc">' + esc(desc) + '</p>' + meter +
       '</div></div>' +
       '<div class="home-actions"><button class="btn ' + (plan.restDay && !plan.rec.a ? 'quiet' : 'primary') + '" data-act="study" ' + (canStudy ? '' : 'disabled') + '>' + (plan.restDay ? '복습만 하기' : '공부 시작') + '</button>' +
-      '<button class="btn quiet" data-act="short" ' + (canStudy ? '' : 'disabled') + '>' + mins + '분만</button></div>' + weekMissButton(plan) + '</section>' +
+      '<button class="btn quiet" data-act="short" ' + (canStudy ? '' : 'disabled') + '>' + mins + '분만</button></div>' + weekMissButton(plan) + songHomeButton() + '</section>' +
       notices +
       '<section class="memory"><p class="lead"><strong>' + counts.long + '개</strong> 단어가 머리에 남았어요</p>' +
       '<p class="sub">전체 ' + totalWords + '개 중 익히는 중 ' + counts.learn + '개, 새 단어 ' + counts.new + '개</p>' +
@@ -840,7 +849,7 @@
     return '<p class="sub">최근 2주 복습 기억률 ' + r.rate + '% (복습 ' + r.total + '번 중 ' + r.good + '번 기억)</p>';
   }
   function hasPendingLearning() {
-    for (var k in DB.cards) { var c = DB.cards[k]; if (!c.sus && (c.st === 1 || c.st === 3)) return true; }
+    for (var k in DB.cards) { var c = DB.cards[k]; if (!c.sus && inDaily(c) && (c.st === 1 || c.st === 3)) return true; }
     return false;
   }
   function homeNotices() {
@@ -872,14 +881,14 @@
   function retrNow(c, now) { return c.last ? F.retrievability((now - c.last) / DAY, c.S || 0.1) : 0; }
   // 카드 한 장에 쓴 시간: 카드가 뜬 뒤 답할 때까지. 자리를 비운 시간이 들어가지 않게 한 장에 90초까지만 센다
   function answerMs(now) { return Math.max(0, Math.min(now - S.cur.shownAt, 90000)); }
-  function recSnap(rec) { return { a: rec.a, c: rec.c, n: rec.n, ms: rec.ms, mN: rec.mN, mR: rec.mR, att: !!rec.att, attAt: rec.attAt }; }
+  function recSnap(rec) { return { a: rec.a, c: rec.c, n: rec.n, ms: rec.ms, mN: rec.mN, mR: rec.mR, sa: rec.sa || 0, sms: rec.sms || 0, att: !!rec.att, attAt: rec.attAt }; }
 
   function startStudy(mode, extra) {
     var now = Date.now();
     var plan = todayPlan();
     var learning = [], reviews = [];
     cards().forEach(function (c) {
-      if (c.sus) return;
+      if (c.sus || !inDaily(c)) return;
       if (c.st === 1 || c.st === 3) learning.push({ id: c.id, due: c.due });
       else if (c.st === 2 && c.due < plan.end) reviews.push(c);
     });
@@ -921,7 +930,7 @@
     var seen = list.filter(function (c) { return c.st !== 0; }).sort(function (a, b) { return retrNow(a, now) - retrNow(b, now); });
     var fresh = list.filter(function (c) { return c.st === 0; }).sort(function (a, b) { return (a.ord || 0) - (b.ord || 0); });
     S = {
-      mode: 'practice', practice: true, deckId: deckId, startedAt: now, deadline: 0,
+      mode: 'practice', practice: true, free: !!(deckId && isFreeDeck(deckId)), deckId: deckId, startedAt: now, deadline: 0,
       queue: seen.concat(fresh).map(function (c) { return c.id; }), pending: [],
       cur: null, answered: 0, good: 0, again: 0, newSeen: 0, ms: 0, attendedNow: false, undo: null, timer: null,
       retry: {}, missed: {}, initialIds: onlyIds ? onlyIds.slice() : null
@@ -939,9 +948,10 @@
       stats: { answered: S.answered, good: S.good, again: S.again, newSeen: S.newSeen, ms: S.ms, attendedNow: S.attendedNow },
       cur: { id: S.cur.id, mode: S.cur.mode }
     };
-    rec.a++; if (g >= 3) rec.c++;
     var spent = answerMs(now);
-    rec.ms += spent; S.ms += spent; // 연습 시간은 오늘 공부 시간에는 들어가고, 예상 시간 계산(mN·mR)에는 안 들어간다
+    if (S.free) { rec.sa = (rec.sa || 0) + 1; rec.sms = (rec.sms || 0) + spent; } // 노래 단어 연습은 출석·오늘 공부 시간과 따로 센다
+    else { rec.a++; if (g >= 3) rec.c++; rec.ms += spent; } // 연습 시간은 오늘 공부 시간에는 들어가고, 예상 시간 계산(mN·mR)에는 안 들어간다
+    S.ms += spent;
     S.answered++;
     if (g >= 3) S.good++;
     else {
@@ -950,10 +960,66 @@
       if (r < 2) { S.retry[c.id] = r + 1; S.queue.splice(Math.min(3, S.queue.length), 0, c.id); }
     }
     var plan = todayPlan();
-    var justAttended = checkAttendance(plan);
+    var justAttended = S.free ? false : checkAttendance(plan);
     saveSoon();
     if (justAttended) { S.attendedNow = true; showBigStamp(plan.key); }
     else sfx(g >= 3 ? 'good' : 'again');
+    nextCard();
+  }
+
+  /* 노래 단어장: 복습 일정(FSRS)은 그대로 쓰지만 오늘 할 일·출석·알림에는 넣지 않고, 원할 때만 꺼낸다 */
+  function songPlan(deckId) {
+    var end = dayEndMs(todayKey());
+    var p = { learning: [], due: [], fresh: [], missed: [], total: 0, dropped: 0, nextDue: 0 };
+    cards().forEach(function (c) {
+      if (c.deck !== deckId) return;
+      p.total++;
+      if (c.sus) { p.dropped++; return; }
+      if (c.st === 1 || c.st === 3) p.learning.push(c);
+      else if (c.st === 0) p.fresh.push(c);
+      else if (c.due < end) p.due.push(c);
+      else if (!p.nextDue || c.due < p.nextDue) p.nextDue = c.due;
+      if (c.st !== 0 && (fails(c) > 0 || c.pw)) p.missed.push(c.id);
+    });
+    p.fresh.sort(function (a, b) { return (a.ord || 0) - (b.ord || 0); });
+    p.due.sort(function (a, b) { return a.due - b.due; });
+    p.newNext = Math.min(p.fresh.length, DB.settings.songNew || 10);
+    p.todo = p.due.length + p.learning.length + p.newNext;
+    return p;
+  }
+  function startSongStudy(deckId) {
+    var now = Date.now(), p = songPlan(deckId);
+    var newCards = p.fresh.slice(0, p.newNext);
+    var queue = [], ni = 0;
+    p.due.forEach(function (c, i) {
+      queue.push(c.id);
+      if ((i + 1) % 4 === 0 && ni < newCards.length) queue.push(newCards[ni++].id);
+    });
+    while (ni < newCards.length) queue.push(newCards[ni++].id);
+    var nowL = p.learning.filter(function (c) { return c.due <= now; }).map(function (c) { return c.id; });
+    var pending = p.learning.filter(function (c) { return c.due > now; }).map(function (c) { return { id: c.id, due: c.due }; });
+    if (!queue.length && !nowL.length && !pending.length) { toast('지금 할 노래 단어가 없어요. 틀린 단어 연습이나 전체 훑어보기를 해 보세요.'); return; }
+    S = {
+      mode: 'song', free: true, deckId: deckId, startedAt: now, deadline: 0,
+      queue: nowL.concat(queue), pending: pending,
+      cur: null, answered: 0, good: 0, again: 0, newSeen: 0, ms: 0, attendedNow: false, undo: null, timer: null,
+      missed: {}, dropped: 0
+    };
+    openOverlay('study', '<div class="study" id="study"></div>');
+    nextCard();
+  }
+  // 공부 중에 '아는 단어라 빼기': 보류로 돌려 다시 안 나오게 한다 (되돌리기 가능)
+  function songDrop() {
+    var c = DB.cards[S.cur.id], rec = dayRec(todayKey());
+    S.undo = {
+      id: c.id, card: clone(c), rec: recSnap(rec),
+      queue: S.queue.slice(), pending: S.pending.map(function (x) { return { id: x.id, due: x.due }; }), missed: clone(S.missed || {}),
+      stats: { answered: S.answered, good: S.good, again: S.again, newSeen: S.newSeen, ms: S.ms, attendedNow: S.attendedNow, dropped: S.dropped },
+      cur: { id: S.cur.id, mode: S.cur.mode }
+    };
+    c.sus = true; c.known = true; S.dropped = (S.dropped || 0) + 1;
+    saveSoon();
+    toast(josa(c.w, '을/를') + ' 뺐어요. 단어장 목록에서 보류를 풀면 다시 나와요.');
     nextCard();
   }
 
@@ -1058,14 +1124,15 @@
         actions = '<div class="grade-row"><button class="btn graphite" data-act="type-giveup">모르겠어요</button><button class="btn primary" data-act="type-check">확인</button></div><div class="under-actions"></div>';
       }
     } else if (!cur.revealed) {
-      actions = '<button class="btn primary tall wide" data-act="reveal">' + (cur.mode === 'cloze' ? '정답 보기' : '뜻 보기') + '</button><div class="under-actions"></div>';
+      actions = '<button class="btn primary tall wide" data-act="reveal">' + (cur.mode === 'cloze' ? '정답 보기' : '뜻 보기') + '</button><div class="under-actions">' +
+        (S.free && !S.practice && isNew ? '<button class="btn text" data-act="song-drop">아는 단어라 빼기</button>' : '') + '</div>';
     } else if (S.practice) {
       actions = '<div class="grade-row"><button class="btn graphite" data-act="grade" data-g="1">몰랐음<small>조금 뒤 다시</small></button>' +
         '<button class="btn primary" data-act="grade" data-g="3">알았음<small>일정 그대로</small></button></div><div class="under-actions"></div>';
     } else {
       actions = '<div class="grade-row"><button class="btn graphite" data-act="grade" data-g="1">몰랐음<small>' + previewLabel(c, 1) + '</small></button>' +
         '<button class="btn primary" data-act="grade" data-g="3">알았음<small>' + previewLabel(c, 3) + '</small></button></div>' +
-        '<div class="under-actions">' + (isNew ? '<button class="btn text" data-act="grade" data-g="4">이미 아는 단어예요 (' + previewLabel(c, 4) + ')</button>' : '') + '</div>';
+        '<div class="under-actions">' + (isNew ? (S.free ? '<button class="btn text" data-act="song-drop">아는 단어라 빼기</button>' : '<button class="btn text" data-act="grade" data-g="4">이미 아는 단어예요 (' + previewLabel(c, 4) + ')</button>') : '') + '</div>';
     }
 
     root.innerHTML = top + '<div class="study-body"><article class="index-card study-card" aria-live="polite">' + body + '</article></div>' +
@@ -1111,7 +1178,8 @@
     S.undo = {
       id: c.id, card: clone(c), rec: recSnap(rec),
       queue: S.queue.slice(), pending: S.pending.map(function (x) { return { id: x.id, due: x.due }; }),
-      stats: { answered: S.answered, good: S.good, again: S.again, newSeen: S.newSeen, ms: S.ms, attendedNow: S.attendedNow },
+      missed: S.free ? clone(S.missed || {}) : null,
+      stats: { answered: S.answered, good: S.good, again: S.again, newSeen: S.newSeen, ms: S.ms, attendedNow: S.attendedNow, dropped: S.dropped || 0 },
       cur: { id: S.cur.id, mode: S.cur.mode }
     };
     var wasNew = c.st === 0;
@@ -1120,16 +1188,22 @@
     Object.assign(c, res.card);
     var modeCode = { recall: 0, cloze: 1, type: 2 }[S.cur.mode] || 0;
     c.h.push([Math.round(now / 1000), g, modeCode, stBefore]);
-    rec.a++; if (g >= 3) rec.c++; if (wasNew) rec.n++;
     var spent = answerMs(now);
-    rec.ms += spent; S.ms += spent;
-    if (rec.mN != null && rec.mR != null) { // 1.0.6 이후에 생긴 날짜 기록만 나눠 센다 (예전 기록은 평균으로 나눈다)
-      if (stBefore === 0 || stBefore === 1) rec.mN += spent; else rec.mR += spent;
+    if (S.free) { // 노래 단어장: 출석·오늘 공부 시간·예상 시간과 따로 센다
+      rec.sa = (rec.sa || 0) + 1; rec.sms = (rec.sms || 0) + spent;
+      if (g < 3) S.missed[c.id] = true;
+    } else {
+      rec.a++; if (g >= 3) rec.c++; if (wasNew) rec.n++;
+      rec.ms += spent;
+      if (rec.mN != null && rec.mR != null) { // 1.0.6 이후에 생긴 날짜 기록만 나눠 센다 (예전 기록은 평균으로 나눈다)
+        if (stBefore === 0 || stBefore === 1) rec.mN += spent; else rec.mR += spent;
+      }
     }
+    S.ms += spent;
     S.answered++; if (g >= 3) S.good++; else S.again++; if (wasNew) S.newSeen++;
     if (c.st === 1 || c.st === 3) S.pending.push({ id: c.id, due: c.due });
     var plan = todayPlan();
-    var justAttended = checkAttendance(plan);
+    var justAttended = S.free ? false : checkAttendance(plan);
     saveSoon();
     if (justAttended) { S.attendedNow = true; showBigStamp(plan.key); }
     else sfx(g >= 3 ? 'good' : 'again');
@@ -1142,10 +1216,12 @@
     var rec = dayRec(todayKey());
     rec.a = u.rec.a; rec.c = u.rec.c; rec.n = u.rec.n; rec.ms = u.rec.ms;
     if (u.rec.mN != null) { rec.mN = u.rec.mN; rec.mR = u.rec.mR; }
+    if (u.rec.sa || rec.sa) { rec.sa = u.rec.sa || 0; rec.sms = u.rec.sms || 0; }
     if (!u.rec.att) { delete rec.att; delete rec.attAt; }
     S.queue = u.queue; S.pending = u.pending;
     S.answered = u.stats.answered; S.good = u.stats.good; S.again = u.stats.again; S.newSeen = u.stats.newSeen; S.attendedNow = u.stats.attendedNow;
     S.ms = u.stats.ms || 0;
+    if (u.stats.dropped != null) S.dropped = u.stats.dropped;
     if (u.retry) S.retry = u.retry;
     if (u.missed) S.missed = u.missed;
     // u.queue / u.pending는 다음 카드를 꺼내기 전 모습이라 그대로 되돌리면 된다
@@ -1172,8 +1248,9 @@
     if (S.timer) clearInterval(S.timer);
     saveNow();
     var s = S; S = null;
-    if (!s.answered) { closeOverlay(); return; }
+    if (!s.answered && !s.dropped) { closeOverlay(); return; }
     if (s.practice) { practiceResult(s); return; }
+    if (s.free) { songResult(s); return; }
     var plan = todayPlan();
     var key = plan.key;
     var tomorrow = F.addDaysKey(key, 1);
@@ -1208,12 +1285,40 @@
   function weekMissedIds() {
     var since = F.dayStartOfKey(weekStartKey(todayKey()), dsh());
     return cards().filter(function (c) {
-      if (c.sus) return false;
+      if (c.sus || !inDaily(c)) return false;
       if (c.pwAt && c.pwAt >= since) return true;
       var h = c.h || [];
       for (var i = h.length - 1; i >= 0; i--) { if (h[i][0] * 1000 < since) break; if (h[i][1] === 1) return true; }
       return false;
     }).map(function (c) { return c.id; });
+  }
+  function whenText(ms) {
+    var days = F.daysBetweenKeys(todayKey(), F.dayKey(ms, dsh()));
+    return days <= 0 ? '오늘' : days === 1 ? '내일' : days + '일 뒤';
+  }
+  // 노래 단어장 공부를 마쳤을 때
+  function songResult(s) {
+    var p = songPlan(s.deckId), rec = dayRec(todayKey());
+    var missed = Object.keys(s.missed || {}).filter(function (id) { return DB.cards[id] && !DB.cards[id].sus; });
+    state.lastMissed = { deck: s.deckId, ids: missed };
+    state.lastPractice = { deck: s.deckId, ids: null };
+    var html = '<div class="result"><h2>노래 단어 ' + s.answered + '장 꺼냈어요</h2>' +
+      '<p class="lead">알았음 ' + s.good + '장, 몰랐음 ' + s.again + '장' + (s.newSeen ? '. 새 단어 ' + s.newSeen + '장을 처음 만났어요' : '') +
+      (s.dropped ? '. 아는 단어 ' + s.dropped + '개는 뺐어요' : '') + '.</p>' +
+      timeLine(s.ms, rec.sms || 0) + '<p class="next">노래 단어는 출석과 오늘 할 일에 들어가지 않아요.</p>';
+    if (missed.length) {
+      html += '<ul class="miss-list">' + missed.slice(0, 12).map(function (id) { var c = DB.cards[id]; return '<li><b>' + esc(c.w) + '</b><span>' + esc(c.m) + '</span></li>'; }).join('') + '</ul>' +
+        (missed.length > 12 ? '<p class="hint">그 밖에 ' + (missed.length - 12) + '개 더 있어요.</p>' : '');
+    }
+    var left = p.due.length + p.newNext;
+    html += '<p class="next">' + (p.fresh.length ? '아직 안 배운 단어 ' + p.fresh.length + '개가 남았어요. ' : '이 노래 단어는 다 만났어요. ') +
+      (p.due.length ? '지금 복습할 단어 ' + p.due.length + '개.' : p.nextDue ? '다음 복습은 ' + whenText(p.nextDue) + '이에요.' : '') + '</p>';
+    html += '<div class="spacer"></div><div class="btns">' +
+      (left ? '<button class="btn primary wide" data-act="song-study" data-id="' + esc(s.deckId) + '">이어서 하기</button>' : '') +
+      (missed.length ? '<button class="btn ' + (left ? 'quiet' : 'primary') + ' wide" data-act="practice-missed">틀린 ' + missed.length + '개만 다시</button>' : '') +
+      '<button class="btn quiet wide" data-act="deck" data-id="' + esc(s.deckId) + '">단어장으로</button>' +
+      '<button class="btn text wide" data-act="close-overlay">홈으로</button></div></div>';
+    openOverlay('result', html);
   }
   function practiceResult(s) {
     var plan = todayPlan(), key = plan.key, st = streakAt(key).count;
@@ -1222,16 +1327,18 @@
     state.lastPractice = { deck: s.deckId, ids: s.initialIds };
     var html = '<div class="result"><h2>연습 ' + s.answered + '문제 했어요</h2>' +
       '<p class="lead">알았음 ' + s.good + ', 몰랐음 ' + s.again + '. 복습 일정은 바뀌지 않았어요.</p>' +
-      timeLine(s.ms, plan.rec.ms);
+      timeLine(s.ms, s.free ? (plan.rec.sms || 0) : plan.rec.ms);
     if (missed.length) {
       html += '<ul class="miss-list">' + missed.slice(0, 12).map(function (id) { var c = DB.cards[id]; return '<li><b>' + esc(c.w) + '</b><span>' + esc(c.m) + '</span></li>'; }).join('') + '</ul>' +
         (missed.length > 12 ? '<p class="hint">그 밖에 ' + (missed.length - 12) + '개 더 있어요.</p>' : '');
     }
-    if (plan.rec.att) html += '<div class="result-stamp">' + sealSVG('출석', '', dayRot(key)) + '<p><strong>오늘 출석했어요</strong>' + (st > 1 ? st + '일 연속이에요.' : '내일도 도장을 이어 가요.') + '</p></div>';
+    if (s.free) html += '<p class="next">노래 단어 연습은 출석과 오늘 할 일에 들어가지 않아요.</p>';
+    else if (plan.rec.att) html += '<div class="result-stamp">' + sealSVG('출석', '', dayRot(key)) + '<p><strong>오늘 출석했어요</strong>' + (st > 1 ? st + '일 연속이에요.' : '내일도 도장을 이어 가요.') + '</p></div>';
     else if (!plan.restDay) html += '<div class="result-stamp"><span class="seal-empty today" style="width:64px;height:64px;flex:none"></span><p><strong>출석까지 ' + Math.max(0, DB.settings.minAnswers - plan.rec.a) + '문제 남았어요</strong>연습한 문제도 출석에 들어가요.</p></div>';
     html += '<div class="spacer"></div><div class="btns">' +
       (missed.length ? '<button class="btn primary wide" data-act="practice-missed">틀린 ' + missed.length + '개만 다시</button>' : '') +
       '<button class="btn quiet wide" data-act="practice-again">처음부터 다시</button>' +
+      (s.free && s.deckId ? '<button class="btn quiet wide" data-act="deck" data-id="' + esc(s.deckId) + '">단어장으로</button>' : '') +
       '<button class="btn ' + (missed.length ? 'text' : 'primary') + ' wide" data-act="close-overlay">홈으로</button></div></div>';
     openOverlay('result', html);
   }
@@ -1377,6 +1484,52 @@
   function wordRow(c) {
     return '<li class="word-item"><button data-act="word" data-id="' + esc(c.id) + '"><span class="w">' + esc(c.w) + '</span><span class="s">' + statusText(c) + '</span><span class="m">' + esc(c.m) + '</span></button></li>';
   }
+  // 단어 탭의 노래 단어장 구역
+  function songSection(songs) {
+    var html = '<section class="section" id="song-section"><h2>노래 단어장</h2>';
+    if (!songs.length) {
+      return html + '<p class="hint" style="margin-top:0">좋아하는 노래의 영어 가사를 Claude에게 보내면 노래 단어 파일을 만들어 줘요. \'Day 파일 가져오기\'로 넣으면 여기에 생기고, 오늘 할 일과 따로 원할 때 공부해요.</p></section>';
+    }
+    html += '<p class="hint" style="margin-top:0">오늘 할 일·출석·알림과 따로, 하고 싶을 때만 공부해요.</p><ul class="deck-list">';
+    songs.forEach(function (d) {
+      var st = deckStats(d.id), p = songPlan(d.id);
+      html += '<li class="deck-item"><button data-act="deck" data-id="' + esc(d.id) + '"><span class="deck-top"><span class="deck-tab">' + esc(d.title) + '</span><span class="deck-count">' +
+        (p.todo ? '<span class="badge new">할 단어 ' + p.todo + '</span> ' : '') + st.total + '개</span></span>' + segbar(st) + '<span class="deck-nums">' + deckNums(st) + '</span></button></li>';
+    });
+    return html + '</ul></section>';
+  }
+  // 노래 단어장 화면
+  function songDeckHTML(d, list, st) {
+    var p = songPlan(d.id), now = Date.now();
+    var revNow = p.due.length + p.learning.filter(function (c) { return c.due <= now + 20 * MIN; }).length;
+    var todo = revNow + p.newNext;
+    var plan = todo
+      ? '지금 할 단어 ' + todo + '개: 복습 ' + revNow + '개, 새 단어 ' + p.newNext + '개' + (p.fresh.length > p.newNext ? ' (안 배운 단어 ' + p.fresh.length + '개 중)' : '')
+      : (p.fresh.length ? '' : '새 단어는 다 만났어요. ') + (p.nextDue ? '다음 복습은 ' + whenText(p.nextDue) + '이에요.' : '');
+    var info = [d.song, d.artist].filter(Boolean).join(', ');
+    var n = DB.settings.songNew || 10;
+    return '<div class="view" style="padding-bottom:28px"><div class="cal-head" style="grid-template-columns:44px 1fr 44px"><button class="icon-btn" data-act="close-overlay" aria-label="뒤로">' + ICON.back + '</button><h2>' + esc(d.title) + '</h2><span></span></div>' +
+      (info ? '<p class="song-info">' + esc(info) + '</p>' : '') +
+      segbar(st) + '<p class="deck-nums" style="margin:8px 0 0">' + deckNums(st) + '</p>' +
+      '<p class="deck-flag">노래 단어장이에요. 오늘 할 일·출석·알림에 들어가지 않고, 하고 싶을 때만 공부해요. 복습 날짜는 기억해 뒀다가 여기서 알려 줘요.</p>' +
+      '<div class="deck-actions">' + (plan ? '<p class="song-plan">' + esc(plan) + '</p>' : '') +
+      '<button class="btn primary wide" data-act="song-study" data-id="' + esc(d.id) + '" ' + (todo || p.learning.length ? '' : 'disabled') + '>공부하기</button>' +
+      '<div class="song-new"><span>한 번에 새 단어</span>' + seg('songNew', [[5, '5개'], [10, '10개'], [20, '20개']], n) + '</div>' +
+      (p.missed.length ? '<button class="btn quiet wide" data-act="song-missed" data-id="' + esc(d.id) + '">틀린 적 있는 단어 ' + p.missed.length + '개 연습</button>' : '') +
+      '<button class="btn quiet wide" data-act="practice" data-id="' + esc(d.id) + '">전체 훑어보기</button>' +
+      '<p class="hint">훑어보기와 틀린 단어 연습은 복습 날짜를 바꾸지 않아요. 아는 단어는 공부할 때 \'아는 단어라 빼기\'를 누르거나, 아래 목록에서 눌러 보류하면 돼요.</p>' +
+      '<div class="pair"><button class="btn quiet" data-act="word-new" data-id="' + esc(d.id) + '">단어 추가</button><button class="btn quiet" data-act="deck-rename" data-id="' + esc(d.id) + '">이름 바꾸기</button></div></div>' +
+      '<ul class="word-list" style="margin-top:12px">' + list.map(wordRow).join('') + '</ul>' +
+      '<div class="btn-list"><button class="btn danger-text" data-act="deck-delete" data-id="' + esc(d.id) + '">이 노래 단어장 지우기</button></div></div>';
+  }
+  // 홈의 노래 단어장 바로가기 (노래 단어장이 있을 때만)
+  function songHomeButton() {
+    var songs = values(DB.decks).filter(function (d) { return d.free; });
+    if (!songs.length) return '';
+    var rev = 0, fresh = 0;
+    songs.forEach(function (d) { var p = songPlan(d.id); rev += p.due.length + p.learning.length; fresh += p.newNext; });
+    return '<button class="btn text wide song-link" data-act="song-open">노래 단어장' + (rev + fresh ? ': 복습 ' + rev + '개, 새 단어 ' + fresh + '개' : '') + '</button>';
+  }
   function renderWords() {
     return '<h1 class="page-title">단어</h1>' +
       '<input class="search" type="search" data-input="search" placeholder="단어나 뜻 검색" value="' + esc(state.search) + '" aria-label="단어 검색">' +
@@ -1390,8 +1543,9 @@
       html += '<section class="section"><h2>검색 결과 ' + found.length + '개</h2><ul class="word-list">' + found.map(wordRow).join('') + '</ul></section>';
       return html;
     }
-    var decks = values(DB.decks).sort(function (a, b) { return a.order - b.order; });
-    if (!decks.length) {
+    var decks = values(DB.decks).filter(function (d) { return !d.free; }).sort(function (a, b) { return a.order - b.order; });
+    var songs = values(DB.decks).filter(function (d) { return d.free; }).sort(function (a, b) { return (a.addedAt || 0) - (b.addedAt || 0); });
+    if (!decks.length && !songs.length) {
       return '<section class="empty"><h2>아직 단어가 없어요</h2><p>Claude가 만들어 준 Day 파일을 가져와 주세요.</p><div class="stack-btns"><button class="btn primary" data-act="import-file">Day 파일 가져오기</button><button class="btn quiet" data-act="paste-import">붙여 넣어 가져오기</button><button class="btn text" data-act="load-sample">체험용 10단어 넣기</button></div></section>';
     }
     var leeches = cards().filter(isLeech);
@@ -1401,13 +1555,14 @@
         leeches.sort(function (a, b) { return fails(b) - fails(a); }).slice(0, 5).map(wordRow).join('') + '</ul></section>';
     }
     html += '<section class="section"><h2>Day별 진도</h2><div class="legend"><span><i class="seg-long"></i>머리에 남음</span><span><i class="seg-learn"></i>익히는 중</span><span><i class="seg-new"></i>새 단어</span></div><ul class="deck-list">';
+    if (!decks.length) html += '<li class="hint">아직 Day가 없어요.</li>';
     decks.forEach(function (d) {
       var s = deckStats(d.id);
       var flag = d.paused ? '<span class="badge new">멈춤</span> ' : d.first ? '<span class="badge">먼저</span> ' : '';
       html += '<li class="deck-item"><button data-act="deck" data-id="' + esc(d.id) + '"><span class="deck-top"><span class="deck-tab">' + esc(d.title) + '</span><span class="deck-count">' + flag + s.total + '개</span></span>' +
         segbar(s) + '<span class="deck-nums">' + deckNums(s) + '</span></button></li>';
     });
-    html += '</ul></section><div class="btn-list"><button class="btn quiet wide" data-act="import-file">Day 파일 가져오기</button><button class="btn text" data-act="paste-import">붙여 넣어 가져오기</button>' +
+    html += '</ul></section>' + songSection(songs) + '<div class="btn-list"><button class="btn quiet wide" data-act="import-file">Day 파일 가져오기</button><button class="btn text" data-act="paste-import">붙여 넣어 가져오기</button>' +
       '<button class="btn text" data-act="deck-new">새 단어장 만들기</button><button class="btn text" data-act="export-study">학습 기록 표 내보내기</button></div>';
     return html;
   }
@@ -1416,6 +1571,7 @@
     if (!d) { closeOverlay(); return; }
     var list = cards().filter(function (c) { return c.deck === d.id; }).sort(function (a, b) { return (a.ord || 0) - (b.ord || 0); });
     var s = deckStats(d.id);
+    if (d.free) { overlay.innerHTML = songDeckHTML(d, list, s); return; }
     var kind = d.day != null ? 'Day' : '단어장';
     var html = '<div class="view" style="padding-bottom:28px"><div class="cal-head" style="grid-template-columns:44px 1fr 44px"><button class="icon-btn" data-act="close-overlay" aria-label="뒤로">' + ICON.back + '</button><h2>' + esc(d.title) + '</h2><span></span></div>' +
       segbar(s) + '<p class="deck-nums" style="margin:8px 0 0">' + deckNums(s) + '</p>' +
@@ -1620,7 +1776,7 @@
     },
     'deck-delete': function (el) {
       var id = el.dataset.id, d = DB.decks[id];
-      var kind = d.day != null ? 'Day' : '단어장';
+      var kind = d.free ? '노래 단어장' : d.day != null ? 'Day' : '단어장';
       confirmSheet(josa(d.title, '을/를') + ' 지울까요?', '이 ' + kind + '의 단어와 진도가 모두 지워져요.', '지우기', function () {
         var gone = cards().filter(function (c) { return c.deck === id; });
         refundNewToday(gone);
@@ -1714,6 +1870,15 @@
     },
     'update-install': function () { Native.installUpdate(); },
     'practice-missed': function () { var m = state.lastMissed; if (m && m.ids.length) startPractice(m.deck, m.ids); },
+    'song-study': function (el) { closeAllModals(); startSongStudy(el.dataset.id); },
+    'song-missed': function (el) { var p = songPlan(el.dataset.id); if (!p.missed.length) { toast('틀린 적 있는 단어가 없어요.'); return; } startPractice(el.dataset.id, p.missed); },
+    'song-drop': function () { songDrop(); },
+    'song-open': function () {
+      var songs = values(DB.decks).filter(function (d) { return d.free; });
+      if (songs.length === 1) { state.deckId = songs[0].id; openOverlay('deck', ''); renderDeckOverlay(); return; }
+      setTab('words');
+      var el = document.getElementById('song-section'); if (el) el.scrollIntoView();
+    },
     'deck-pause': function (el) {
       var d = DB.decks[el.dataset.id]; if (!d) return;
       d.paused = !d.paused; if (!d.paused) delete d.paused;
@@ -1797,7 +1962,7 @@
     var act = t.dataset.act;
     var fn = actions[act];
     if (!fn) return;
-    var needsCard = { 'reveal': 1, 'grade': 1, 'type-check': 1, 'type-giveup': 1, 'type-override': 1, 'type-next': 1 };
+    var needsCard = { 'reveal': 1, 'grade': 1, 'type-check': 1, 'type-giveup': 1, 'type-override': 1, 'type-next': 1, 'song-drop': 1 };
     if (needsCard[act] && (!S || !S.cur)) return;
     e.preventDefault();
     fn(t, e);
@@ -1921,5 +2086,5 @@
   // 테스트용 접근점
   window.__kv = { get db() { return DB; }, parseLines: parseLines, weekMissedIds: weekMissedIds, studyCsv: studyCsv, newQueueCards: newQueueCards, todayPlan: todayPlan, streakAt: streakAt, buildSummary: buildSummary, importText: importText, checkTyped: checkTyped, clozeParts: clozeParts,
     isRestDay: isRestDay, passWindow: passWindow, reviewStats: reviewStats, josa: josa, rebalanceRestDays: rebalanceRestDays,
-    paceStats: paceStats, estMinutes: estMinutes, fmtMin: fmtMin };
+    paceStats: paceStats, estMinutes: estMinutes, fmtMin: fmtMin, songPlan: songPlan, isFreeDeck: isFreeDeck, hasCards: hasCards };
 })();

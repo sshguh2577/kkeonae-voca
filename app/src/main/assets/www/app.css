@@ -446,3 +446,9 @@ button { cursor: pointer; }
 .update-bar { height: 8px; border-radius: 99px; background: var(--line); overflow: hidden; margin: 14px 0 6px; }
 .update-bar span { display: block; height: 100%; width: 0; background: var(--blue); transition: width .2s ease-out; }
 .week-miss { margin-top: 10px; }
+
+/* 노래 단어장 */
+.song-link { margin-top: 6px; }
+.song-info { margin: 4px 0 10px; color: var(--ink-3); font-size: 14px; }
+.song-plan { margin: 0; font-size: 15px; font-weight: 700; color: var(--ink); }
+.song-new { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 14px; color: var(--ink-2); }
