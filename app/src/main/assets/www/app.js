@@ -7,14 +7,14 @@
   var LONG_TERM_S = 21; // 안정도 21일 이상 = 머리에 남은 단어
 
   var DEFAULT_SETTINGS = {
-    newPerDay: 15,
+    newPerDay: 30, // 1.0.11부터 30 (전에는 15). 업데이트 뒤 처음 켤 때 한 번 30으로 맞춘다
     minAnswers: 20,
     retention: 0.9,
     dayStartHour: 4,
     n1: { on: true, h: 21, m: 0 },
     n2: { on: true, h: 23, m: 0 },
     mix: true,
-    autoReduce: true,
+    autoReduce: false, // 1.0.11부터 꺼 둠. 업데이트 뒤 처음 켤 때 한 번 끈다
     sound: true,
     autoSpeak: false,
     shortMinutes: 5,
@@ -22,9 +22,12 @@
     songNew: 10, // 노래 단어장 한 번에 꺼낼 새 단어 수
     majorPerDay: 5, // 전공 새 단어: 과목(금융·토목)마다 하루에
     majorMin: 10, // 전공 출석 기준(문제 수)
-    bonusCount: 10, // 덤: 갈래마다 하루에 써 볼 단어 수 (0이면 오늘 맞힌 단어 전부)
-    bonusMode: 'en' // 덤 방식: en 뜻 보고 영어 쓰기, ko 영어 보고 뜻 쓰기, mix 번갈아
+    bonusSame: true, // 쓰기 단어 수를 그 갈래의 하루 새 단어 수와 같게 (토익 30, 전공은 과목별 수의 두 배)
+    bonusCount: 10, // bonusSame이 꺼졌을 때: 갈래마다 하루에 써 볼 단어 수 (0이면 오늘 맞힌 단어 전부)
+    bonusMode: 'en' // 쓰기 방식: en 뜻 보고 영어 쓰기, ko 영어 보고 뜻 쓰기, mix 번갈아
   };
+  // 검사용 스위치: 1.0.10까지의 검사를 그때의 처음 값(하루 15개, 줄이기 켬, 쓰기 10개)으로 돌릴 때만 쓴다. 앱에서는 켜지지 않는다
+  if (window.__kvLegacyDefaults) { DEFAULT_SETTINGS.newPerDay = 15; DEFAULT_SETTINGS.autoReduce = true; DEFAULT_SETTINGS.bonusSame = false; }
   var PASS_ANCHOR = '2026-01-04'; // 일요일. 휴식권은 이날부터 2주 단위로 1장
   var PASS_DAYS = 14;
 
@@ -141,7 +144,7 @@
       settings: clone(DEFAULT_SETTINGS),
       decks: {}, cards: {}, days: {},
       meta: {
-        lastBackupAt: 0, bestStreak: 0, welcomed: false,
+        lastBackupAt: 0, bestStreak: 0, welcomed: false, d11: true,
         restHistory: [{ from: F.dayKey(Date.now(), DEFAULT_SETTINGS.dayStartHour), dows: DEFAULT_SETTINGS.restDows.slice() }]
       }
     };
@@ -158,8 +161,10 @@
     values(o.decks).forEach(function (d) { if (!d.track) d.track = d.free ? 'song' : 'toeic'; }); // 1.0.8부터 단어장마다 갈래가 있다
     o.days = o.days || {};
     var hadHistory = !!(o.meta && o.meta.restHistory);
+    var hadD11 = !!(o.meta && o.meta.d11) || !!window.__kvLegacyDefaults; // 1.0.11의 새 기본값(하루 30개, 줄이기 끔)을 이미 맞춘 기록인가
     o.meta = Object.assign(base.meta, o.meta || {});
     if (!Array.isArray(o.settings.restDows)) o.settings.restDows = DEFAULT_SETTINGS.restDows.slice();
+    if (!hadD11) { o.settings.newPerDay = DEFAULT_SETTINGS.newPerDay; o.settings.autoReduce = DEFAULT_SETTINGS.autoReduce; } // 한 번만. 그 뒤에는 설정에서 바꾼 값이 남는다
     // 쉬는 요일 기능이 생기기 전 기록이면, 업데이트한 날부터 적용한다 (지난 날을 소급하지 않음)
     if (!hadHistory) o.meta.restHistory = [{ from: F.dayKey(Date.now(), o.settings.dayStartHour), dows: o.settings.restDows.slice() }];
     values(o.cards).forEach(function (c) { if (!c.h) c.h = []; if (c.sus == null) c.sus = false; });
@@ -459,15 +464,15 @@
     return false;
   }
 
-  /* ================= 덤 (오늘 카드를 다 꺼낸 갈래에서 직접 써 보기) =================
+  /* ================= 쓰기 (오늘 카드를 다 꺼낸 갈래에서 직접 써 보기) =================
      뜻을 보고 영어를 쓰거나(en), 영어를 보고 뜻을 쓴다(ko). 복습 일정은 건드리지 않는다.
-     그날 덤을 끝내면 그 갈래의 도장이 꽉 찬 도장이 된다. 틀린 단어는 다음 덤에 먼저 나온다.
+     그날 쓰기를 끝내면 그 갈래의 도장이 꽉 찬 도장이 된다. 틀린 단어는 다음 쓰기에 먼저 나온다.
      날짜 기록: 토익은 days[key].b, 전공은 days[key].mj.b = { goal, n, ok, ms, done, at }
      단어 기록: bn 써 본 횟수, bk 맞힌 횟수, bAt 마지막으로 써 본 때, bm 틀린 채로 남은 때(맞히면 지운다) */
   function trackRecOf(key, track) { var d = DB.days[key]; return (track === 'major' ? (d && d.mj) : d) || null; } // 읽기만 (없으면 null)
   function bonusOn(rec) { return !!(rec && rec.b && rec.b.done); }
   function bonusRec(track) { var r = track === 'major' ? mjRec(todayKey()) : dayRec(todayKey()); if (!r.b) r.b = { n: 0, ok: 0, ms: 0 }; return r.b; }
-  // 그 갈래의 오늘 카드를 다 꺼냈는가 (덤이 열리는 조건)
+  // 그 갈래의 오늘 카드를 다 꺼냈는가 (쓰기가 열리는 조건)
   function trackFinished(track) {
     if (track === 'major') {
       if (!hasMajorCards()) return false;
@@ -477,13 +482,13 @@
     var p = todayPlan();
     return p.rec.a > 0 && p.due + p.newLeft === 0 && !hasPendingLearning();
   }
-  // 오늘 덤에 낼 수 있는 단어: 지난 덤에서 틀린 단어, 오늘 맞힌 복습 단어, 오늘 새로 익힌 단어 순
+  // 오늘 쓰기에 낼 수 있는 단어: 지난 쓰기에서 틀린 단어, 오늘 맞힌 복습 단어, 오늘 새로 익힌 단어 순
   function bonusPool(track) {
     var start = F.dayStartOfKey(todayKey(), dsh());
     var carry = [], rev = [], fresh = [];
     cards().forEach(function (c) {
       if (c.sus || c.st === 0 || trackOf(c) !== track) return;
-      if (c.bAt && c.bAt >= start) return; // 오늘 덤에서 이미 써 본 단어
+      if (c.bAt && c.bAt >= start) return; // 오늘 쓰기에서 이미 써 본 단어
       if (c.bm) { carry.push(c); return; }
       var h = c.h || [], last = h[h.length - 1];
       if (!last || last[0] * 1000 < start || last[1] < 3) return; // 오늘 마지막 답이 '알았음'인 단어만
@@ -496,37 +501,50 @@
     fresh.sort(function (a, b) { return (deckOrder(a.deck) - deckOrder(b.deck)) || ((a.ord || 0) - (b.ord || 0)); });
     return carry.concat(rev, fresh).map(function (c) { return c.id; });
   }
-  // 오늘 덤 상태: done 끝냄, open 지금 할 수 있음(left개 남음), locked 아직 카드가 남아 안 열림
+  // 오늘 쓰기 상태: done 끝냄, open 지금 할 수 있음(left개 남음), locked 아직 카드가 남아 안 열림
   function bonusState(track) {
     var rec = trackRecOf(todayKey(), track), b = rec && rec.b;
     if (b && b.done) return { done: true, open: false, n: b.n, ok: b.ok };
     if (!trackFinished(track)) return { done: false, open: false, locked: true };
-    var pool = bonusPool(track), count = DB.settings.bonusCount;
+    var pool = bonusPool(track), count = bonusCountFor(track);
     var goal = b && b.goal != null ? b.goal : (count > 0 ? Math.min(count, pool.length) : pool.length);
     var n = b ? b.n : 0;
-    var left = Math.max(0, Math.min(pool.length, goal - n));
+    var fresh = Math.max(0, Math.min(pool.length, goal - n)); // 아직 한 번도 안 써 본 몫
+    var redo = bonusOpenIds(b).length; // 틀린 뒤 아직 못 고친 단어
+    var left = fresh + redo;
     if (b && n > 0 && left === 0) { b.done = true; if (!b.at) b.at = Date.now(); saveSoon(); return { done: true, open: false, n: b.n, ok: b.ok }; } // 낼 단어가 떨어졌으면 끝낸 걸로 친다
-    return { done: false, open: left > 0, left: left, goal: goal, n: n };
+    return { done: false, open: left > 0, left: left, fresh: fresh, redo: redo, goal: goal, n: n };
   }
+  // 쓰기 단계에서 하루에 낼 단어 수. '새 단어만큼'이면 그 갈래의 하루 새 단어 수와 같다 (새 단어가 다 떨어진 뒤에도 같은 수만큼 낸다)
+  function bonusCountFor(track) {
+    var s = DB.settings;
+    if (s.bonusSame) { var n = track === 'major' ? s.majorPerDay * 2 : s.newPerDay; return n > 0 ? n : 10; }
+    return s.bonusCount;
+  }
+  // 오늘 쓰기에서 틀린 뒤 아직 맞히지 못한 단어 (맞힐 때까지 다시 나온다)
+  function bonusCountForSame(track) { var s = DB.settings, n = track === 'major' ? s.majorPerDay * 2 : s.newPerDay; return n > 0 ? n : 10; }
+  function bonusOpenIds(b) { return ((b && b.open) || []).filter(function (id) { var c = DB.cards[id]; return c && !c.sus; }); }
   function bonusWhat() { var m = DB.settings.bonusMode; return m === 'ko' ? '영어 보고 뜻 쓰기' : m === 'mix' ? '영어·뜻 번갈아 쓰기' : '뜻 보고 영어 쓰기'; }
   function bonusButton(track) {
     var st = bonusState(track);
     if (!st.open) return '';
     return '<button class="btn primary wide" data-act="bonus" data-track="' + track + '">' +
-      (st.n ? '덤 이어서 하기 (' + st.left + '개 남음)' : '덤: ' + bonusWhat() + ' ' + st.left + '개') + '</button>';
+      (st.n ? '쓰기 이어서 하기 (' + st.left + '개 남음)' : '쓰기 단계: ' + bonusWhat() + ' ' + st.left + '개') + '</button>';
   }
-  var BONUS_HINT = '<p class="hint bonus-hint">틀려도 복습 일정은 그대로예요. 끝내면 오늘 도장이 꽉 찬 도장이 돼요.</p>';
+  var BONUS_HINT = '<p class="hint bonus-hint">틀려도 복습 일정은 그대로예요. 틀린 단어는 맞힐 때까지 다시 나오고, 다 맞히면 오늘 도장이 꽉 찬 도장이 돼요.</p>';
   function startBonus(track) {
     var st = bonusState(track);
-    if (!st.open) { toast(st.done ? '오늘 덤은 이미 끝냈어요.' : st.locked ? '오늘 카드를 다 꺼내면 덤이 열려요.' : '오늘은 덤으로 낼 단어가 없어요.'); return; }
+    if (!st.open) { toast(st.done ? '오늘 쓰기는 이미 끝냈어요.' : st.locked ? '오늘 카드를 다 꺼내면 쓰기가 열려요.' : '오늘은 쓰기로 낼 단어가 없어요.'); return; }
     var b = bonusRec(track);
     if (b.goal == null) b.goal = st.goal;
-    var ids = bonusPool(track).slice(0, st.left);
+    var redo = bonusOpenIds(b), tried = {};
+    redo.forEach(function (id) { tried[id] = true; }); // 앞서 틀린 단어는 다시 맞혀도 기록 수에는 세지 않는다
+    var ids = redo.concat(bonusPool(track).slice(0, st.fresh));
     var mode = DB.settings.bonusMode, dir = {};
     ids.forEach(function (id, i) { dir[id] = mode === 'ko' ? 'mean' : mode === 'mix' ? ((b.n + i) % 2 ? 'mean' : 'type') : 'type'; });
     S = {
       mode: 'bonus', bonus: true, track: track, startedAt: Date.now(), deadline: 0,
-      queue: ids, pending: [], dir: dir, retry: {}, missed: {},
+      queue: ids, pending: [], dir: dir, tried: tried, missed: {}, fixed: 0,
       cur: null, answered: 0, good: 0, again: 0, newSeen: 0, ms: 0, first: 0, firstOk: 0,
       attendedNow: false, doneNow: false, undo: null, timer: null
     };
@@ -534,22 +552,28 @@
     openOverlay('study', '<div class="study" id="study"></div>');
     nextCard();
   }
-  // 덤 답 기록: 복습 일정(S, due)은 그대로 둔다. 틀린 단어는 이번 덤 끝에 한 번 더 나온다(그 답은 기록에 세지 않는다)
+  // 쓰기 답 기록: 복습 일정(S, due)은 그대로 둔다. 처음 답만 기록에 센다.
+  // 틀린 단어는 세 장쯤 뒤에 다시 나오고, 맞힐 때까지 되풀이한다. 다 고쳐야 꽉 찬 도장이 된다.
+  // 처음에 틀렸던 단어는 그날 고쳤어도 다음 쓰기에 먼저 나온다 (bm을 지우지 않는다)
   function bonusGrade(ok) {
     var c = DB.cards[S.cur.id], now = Date.now(), track = S.track;
     var b = bonusRec(track), rec = track === 'major' ? mjRec(todayKey()) : dayRec(todayKey());
     var spent = answerMs(now);
-    if (!S.retry[c.id]) {
+    if (!b.open) b.open = [];
+    var at = b.open.indexOf(c.id);
+    if (!S.tried[c.id]) {
+      S.tried[c.id] = true;
       b.n++; if (ok) b.ok++;
       c.bn = (c.bn || 0) + 1; if (ok) c.bk = (c.bk || 0) + 1;
       c.bAt = now;
       if (ok) delete c.bm;
-      else { c.bm = now; S.missed[c.id] = true; S.retry[c.id] = 1; S.queue.push(c.id); }
+      else { c.bm = now; S.missed[c.id] = true; if (at === -1) b.open.push(c.id); }
       rec.a++; if (ok) rec.c++;
       S.first++; if (ok) S.firstOk++;
-      if (!b.done && b.n >= (b.goal || 0)) { b.done = true; b.at = now; S.doneNow = true; }
-    }
-    b.ms = (b.ms || 0) + spent; rec.ms += spent; // 덤 시간은 오늘 공부 시간에 들어가고, 예상 시간 계산(mN·mR)에는 안 들어간다
+    } else if (ok && at !== -1) { b.open.splice(at, 1); S.fixed++; }
+    if (!ok) S.queue.splice(Math.min(3, S.queue.length), 0, c.id);
+    if (!b.done && b.n >= (b.goal || 0) && !bonusOpenIds(b).length) { b.done = true; b.at = now; S.doneNow = true; }
+    b.ms = (b.ms || 0) + spent; rec.ms += spent; // 쓰기 시간은 오늘 공부 시간에 들어가고, 예상 시간 계산(mN·mR)에는 안 들어간다
     S.ms += spent; S.answered++; if (ok) S.good++; else S.again++;
     saveSoon();
     sfx(ok ? 'good' : 'again');
@@ -563,24 +587,24 @@
     sfx('stamp');
     requestAnimationFrame(function () { el.classList.add('go'); });
     setTimeout(function () { layer.innerHTML = ''; }, 2000);
-    toast((mj ? '전공 ' : '') + '덤까지 끝냈어요. 오늘 도장이 꽉 찼어요.');
+    toast((mj ? '전공 ' : '') + '쓰기까지 끝냈어요. 오늘 도장이 꽉 찼어요.');
   }
   function bonusResult(s) {
     var track = s.track, mj = track === 'major', key = todayKey();
     var b = bonusRec(track), st = bonusState(track), rec = trackRecOf(key, track) || { ms: 0 };
     var missed = Object.keys(s.missed).filter(function (id) { return DB.cards[id]; });
     var rot = dayRot(key) + (mj ? 4 : 0);
-    var html = '<div class="result"><h2>' + (mj ? '전공 ' : '') + '덤 ' + s.first + '개 써 봤어요</h2>' +
-      '<p class="lead">맞음 ' + s.firstOk + '개, 틀림 ' + (s.first - s.firstOk) + '개. 복습 일정은 바뀌지 않았어요.</p>' + timeLine(s.ms, rec.ms);
-    if (b.done) html += '<div class="result-stamp">' + sealSVG(mj ? '전공' : '출석', '', rot, '', true) + '<p><strong>오늘 ' + (mj ? '전공 ' : '') + '덤까지 끝냈어요</strong>오늘 도장이 꽉 찬 도장이 됐어요.</p></div>';
-    else html += '<div class="result-stamp">' + sealSVG(mj ? '전공' : '출석', '', rot) + '<p><strong>' + (st.open ? '덤 ' + st.left + '개가 남았어요' : '덤이 아직 남았어요') + '</strong>' + (st.open ? '마저 하면 오늘 도장이 꽉 찬 도장이 돼요.' : '오늘 카드를 다 꺼내면 이어서 할 수 있어요.') + '</p></div>';
+    var html = '<div class="result"><h2>' + (s.first ? (mj ? '전공 ' : '') + '쓰기 ' + s.first + '개를 했어요' : '틀렸던 단어 ' + (s.fixed || 0) + '개를 고쳤어요') + '</h2>' +
+      '<p class="lead">' + (s.first ? '맞음 ' + s.firstOk + '개, 틀림 ' + (s.first - s.firstOk) + '개. ' : '') + '복습 일정은 바뀌지 않았어요.</p>' + timeLine(s.ms, rec.ms);
+    if (b.done) html += '<div class="result-stamp">' + sealSVG(mj ? '전공' : '출석', '', rot, '', true) + '<p><strong>오늘 ' + (mj ? '전공 ' : '') + '쓰기까지 끝냈어요</strong>오늘 도장이 꽉 찬 도장이 됐어요.</p></div>';
+    else html += '<div class="result-stamp">' + sealSVG(mj ? '전공' : '출석', '', rot) + '<p><strong>' + (st.open ? (st.fresh ? '쓰기 ' + st.left + '개가 남았어요' : '틀린 단어 ' + st.redo + '개를 아직 못 고쳤어요') : '쓰기가 아직 남았어요') + '</strong>' + (st.open ? '마저 하면 오늘 도장이 꽉 찬 도장이 돼요.' : '오늘 카드를 다 꺼내면 이어서 할 수 있어요.') + '</p></div>';
     if (missed.length) {
       html += '<ul class="miss-list">' + missed.slice(0, 12).map(function (id) { var c = DB.cards[id]; return '<li><b>' + esc(c.w) + '</b><span>' + esc(c.m) + '</span></li>'; }).join('') + '</ul>' +
         (missed.length > 12 ? '<p class="hint">그 밖에 ' + (missed.length - 12) + '개 더 있어요.</p>' : '') +
-        '<p class="hint">틀린 단어는 다음 덤에 먼저 나와요.</p>';
+        '<p class="hint">틀린 단어는 다음 쓰기에 먼저 나와요.</p>';
     }
     html += '<div class="spacer"></div><div class="btns">' +
-      (st.open ? '<button class="btn primary wide" data-act="bonus" data-track="' + track + '">덤 이어서 하기 (' + st.left + '개 남음)</button>' : '') +
+      (st.open ? '<button class="btn primary wide" data-act="bonus" data-track="' + track + '">쓰기 이어서 하기 (' + st.left + '개 남음)</button>' : '') +
       '<button class="btn ' + (st.open ? 'quiet' : 'primary') + ' wide" data-act="close-overlay">홈으로</button></div></div>';
     openOverlay('result', html);
     if (s.doneNow) showBonusStamp(key, track);
@@ -615,6 +639,19 @@
         (seen[e.v] ? '<p class="seen">이 폰에서는 ' + shortDate(seen[e.v]) + '에 처음 켰어요.</p>' : '') + '</article>';
     });
     openOverlay('changes', html + '</div>');
+  }
+  /* ================= 설명서 (설정 > 설명서 보기). 내용은 guide.js ================= */
+  function openGuide() {
+    var list = window.KKGuide || [];
+    var html = '<div class="view changes guide" style="padding-bottom:28px"><div class="cal-head" style="grid-template-columns:44px 1fr 44px"><button class="icon-btn" data-act="close-overlay" aria-label="뒤로">' + ICON.back + '</button><h2>설명서</h2><span></span></div>' +
+      '<p class="hint" style="margin:0 0 4px">앱이 어떻게 움직이는지, 그리고 앞으로의 계획을 적어 둬요. 버전이 바뀌면 여기도 같이 고쳐요.</p>';
+    list.forEach(function (e) {
+      html += '<article class="chg"><h3>' + esc(e.t) + '</h3>' +
+        (e.p || []).map(function (x) { return '<p class="g">' + esc(x) + '</p>'; }).join('') +
+        (e.items && e.items.length ? changeItems(e) : '') +
+        (e.note ? '<p class="seen">' + esc(e.note) + '</p>' : '') + '</article>';
+    });
+    openOverlay('guide', html + '</div>');
   }
   // 업데이트하고 처음 켰을 때 한 번, 그 버전에서 달라진 점을 보여 준다
   function showWhatsNew(v) {
@@ -725,7 +762,7 @@
       ex: str(raw.ex || raw.example),
       exKo: str(raw.exKo || raw.example_ko || raw.exampleKo),
       note: str(raw.note || raw.memo),
-      cue: str(raw.cue), // 덤에서 보여 줄 긴 뜻
+      cue: str(raw.cue), // 쓰기에서 보여 줄 긴 뜻
       nu: str(raw.nu || raw.nuance) // 비슷한 말과 쓰임이 어떻게 다른지
     };
   }
@@ -943,7 +980,7 @@
 
   /* ================= 그림 조각 ================= */
   var INK_DASH = '46 1.4 19 0.9 33 1.6 58 1.1 21 1.3';
-  // solid: 가운데를 꽉 채운 도장 (덤까지 끝낸 날)
+  // solid: 가운데를 꽉 채운 도장 (쓰기까지 끝낸 날)
   function sealSVG(text, sub, rot, cls, solid) {
     var ink = solid ? 'var(--card)' : 'var(--stamp)';
     return '<svg class="seal ' + (cls || '') + (solid ? ' solid' : '') + '" viewBox="0 0 64 64" aria-hidden="true"><g transform="rotate(' + (rot || 0) + ' 32 32)">' +
@@ -1146,7 +1183,7 @@
     if (plan.reduced) desc += ' 복습이 많아서 오늘 새 단어를 ' + plan.rec.cap + '장으로 줄였어요.';
     var goal = DB.settings.minAnswers;
     var meter;
-    if (plan.rec.att) meter = bonusOn(plan.rec) ? '<p class="meter-label">' + sealSVG('출석', '', -8, '', true) + '오늘 덤까지 끝냈어요.</p>'
+    if (plan.rec.att) meter = bonusOn(plan.rec) ? '<p class="meter-label">' + sealSVG('출석', '', -8, '', true) + '오늘 쓰기까지 끝냈어요.</p>'
       : '<p class="meter-label">' + sealSVG('출석', '', -8) + '오늘 출석했어요. 더 하면 내일이 가벼워져요.</p>';
     else if (plan.restDay) meter = '<p class="meter-label">쉬는 날이라 공부를 안 해도 연속 기록이 이어져요.</p>';
     else if (plan.rec.rest) meter = '<p class="meter-label">할 카드가 없는 날이라 출석으로 쳐 줘요.</p>';
@@ -1198,7 +1235,7 @@
     }
     if (mp.reduced) desc += ' 전공 복습이 많아서 새 단어를 과목별 ' + m.cap + '장으로 줄였어요.';
     var goal = s.majorMin, meter;
-    if (m.att) meter = bonusOn(m) ? '<p class="meter-label">' + sealSVG('전공', '', -8, '', true) + '오늘 전공 덤까지 끝냈어요.</p>'
+    if (m.att) meter = bonusOn(m) ? '<p class="meter-label">' + sealSVG('전공', '', -8, '', true) + '오늘 전공 쓰기까지 끝냈어요.</p>'
       : '<p class="meter-label">' + sealSVG('전공', '', -8) + '오늘 전공 출석했어요.</p>';
     else if (mp.restDay) meter = '<p class="meter-label">쉬는 날이라 안 해도 전공 연속 기록이 이어져요.</p>';
     else if (m.rest) meter = '<p class="meter-label">할 전공 카드가 없는 날이라 출석으로 쳐 줘요.</p>';
@@ -1231,7 +1268,9 @@
     var key = todayKey();
     var r = reviewStats(F.addDaysKey(key, -13), key, t);
     if (r.total < 20) return '';
-    return '<p class="sub">최근 2주 복습 기억률 ' + r.rate + '% (복습 ' + r.total + '번 중 ' + r.good + '번 기억)</p>';
+    var prev = reviewStats(F.addDaysKey(key, -27), F.addDaysKey(key, -14), t); // 그 앞 2주. 올랐는지 내렸는지 견주어 보라고
+    return '<p class="sub">최근 2주 복습 기억률 ' + r.rate + '% (복습 ' + r.total + '번 중 ' + r.good + '번 기억)' +
+      (prev.total >= 20 ? '. 그 전 2주는 ' + prev.rate + '%였어요.' : '') + '</p>';
   }
   function hasPendingLearning() {
     for (var k in DB.cards) { var c = DB.cards[k]; if (!c.sus && inDaily(c) && (c.st === 1 || c.st === 3)) return true; }
@@ -1247,6 +1286,7 @@
     if (ns && !ns.granted) {
       out += '<div class="notice"><p>알림이 꺼져 있어요. 켜 두면 정한 시간에 오늘 할 양과 출석 마감을 알려 드려요.</p><div class="row"><button class="btn small primary" data-act="notif-on">알림 켜기</button></div></div>';
     }
+    out += lowNewNotice();
     if (Object.keys(DB.cards).length) {
       var last = DB.meta.lastBackupAt || 0;
       var age = last ? Math.floor((Date.now() - last) / DAY) : Math.floor((Date.now() - DB.createdAt) / DAY);
@@ -1257,6 +1297,20 @@
       }
     }
     return out;
+  }
+
+  // 토익 새 단어가 이틀 치보다 적게 남으면 알려 준다. '더 넣을 단어가 없어요'를 누르면 새 단어장을 넣을 때까지 안 보인다
+  function toeicCardCount() { var n = 0; for (var k in DB.cards) { if (inDaily(DB.cards[k])) n++; } return n; }
+  function lowNewNotice() {
+    var per = DB.settings.newPerDay;
+    if (homeTrack() !== 'toeic' || per <= 0) return '';
+    var total = toeicCardCount();
+    if (!total || DB.meta.lowNewOff === total) return '';
+    var left = todayPlan().newAvail;
+    if (left >= per * 2) return '';
+    return '<div class="notice"><p>' + (left > 0 ? '새 단어가 ' + left + '개 남았어요. 하루 ' + per + '개씩이면 이틀 안에 다 떨어져요.' : '새 단어가 다 떨어졌어요.') +
+      ' 다음 Day 파일을 가져오면 이어서 나와요.</p><div class="row"><button class="btn small primary" data-act="import-file" data-target="toeic">Day 파일 가져오기</button>' +
+      '<button class="btn small text" data-act="lownew-off">더 넣을 단어가 없어요</button></div></div>';
   }
 
   /* ================= 공부 ================= */
@@ -1451,9 +1505,15 @@
   function chooseMode(c) {
     if (window.__kvForceMode && c.st === 2) return window.__kvForceMode === 'cloze' && !clozeParts(c) ? 'recall' : window.__kvForceMode;
     if (!DB.settings.mix || c.st !== 2) return 'recall';
-    // 직접 쓰기는 1.0.10부터 덤 단계로 옮겼다. 평소 복습에는 예문 빈칸만 섞는다 (나오는 비율은 전과 같게)
-    if (c.S >= 3 && Math.random() < (c.S >= 7 ? 0.25 : 0.5) && clozeParts(c)) return 'cloze';
+    // 직접 쓰기는 1.0.10부터 쓰기 단계로 옮겼다. 평소 복습에는 예문 빈칸만 섞는다 (나오는 비율은 전과 같게)
+    // 1.0.11: 복습에서 한 번이라도 맞힌 단어만 빈칸으로 낸다 (처음부터 알던 단어도 첫 복습은 그냥 떠올리기)
+    if (c.S >= 3 && passedReview(c) && Math.random() < (c.S >= 7 ? 0.25 : 0.5) && clozeParts(c)) return 'cloze';
     return 'recall';
+  }
+  function passedReview(c) {
+    var h = c.h || [];
+    for (var i = 0; i < h.length; i++) { if (h[i][3] === 2 && h[i][1] >= 3) return true; }
+    return false;
   }
   function nextCard() {
     if (S.mode === 'short' && S.deadline && Date.now() >= S.deadline && S.answered > 0) { finishStudy(); return; }
@@ -1496,10 +1556,10 @@
     var top = '<header class="study-top"><button class="icon-btn" data-act="study-close" aria-label="공부 그만하기">' + ICON.close + '</button>' +
       '<div class="progress" aria-hidden="true"><span id="study-progress"></span></div><span class="study-count" id="study-count"></span>' +
       '<button class="icon-btn" data-act="undo" aria-label="방금 답 되돌리기" ' + (S.undo ? '' : 'style="visibility:hidden"') + '>' + ICON.undo + '</button></header>';
-    var kicker = '<p class="card-kicker"><span>' + esc(deckTitle(c.deck)) + '</span>' + (S.bonus ? '<span class="badge">덤</span>' : S.practice ? '<span class="badge">연습</span>' : isNew ? '<span class="badge new">새 단어</span>' : (isLeech(c) ? '<span class="badge">자주 틀림</span>' : '<span></span>')) + '</p>';
+    var kicker = '<p class="card-kicker"><span>' + esc(deckTitle(c.deck)) + '</span>' + (S.bonus ? '<span class="badge">쓰기</span>' : S.practice ? '<span class="badge">연습</span>' : isNew ? '<span class="badge new">새 단어</span>' : (isLeech(c) ? '<span class="badge">자주 틀림</span>' : '<span></span>')) + '</p>';
     var speakBtn = '<button class="icon-btn" data-act="speak" data-text="' + esc(c.w) + '" aria-label="발음 듣기">' + ICON.speak + '</button>';
     var body = '', actions = '';
-    var promptKo = S.bonus && c.cue ? c.cue : c.m; // 덤에서는 긴 뜻으로 묻는다 (없으면 짧은 뜻)
+    var promptKo = S.bonus && c.cue ? c.cue : c.m; // 쓰기에서는 긴 뜻으로 묻는다 (없으면 짧은 뜻)
     var answerBlock = '<div class="answer">' +
       (cur.mode !== 'type' || promptKo !== c.m ? '<p class="meaning">' + esc(c.m) + '</p>' : '') +
       (c.ex ? '<button class="speak-ex" data-act="speak" data-text="' + esc(c.ex) + '" aria-label="예문 듣기"><p class="example">' + exampleHTML(c.ex) + '</p></button>' : '') +
@@ -1518,7 +1578,7 @@
         (c.exKo ? '<p class="example-ko">' + esc(c.exKo) + '</p>' : '') +
         (cur.revealed ? '<div class="answer"><div class="headword-row"><h2 class="headword long">' + esc(c.w) + '</h2>' + speakBtn + '</div><p class="meaning" style="margin-top:8px">' + esc(c.m) + '</p>' + (c.note ? '<p class="memo">' + esc(c.note) + '</p>' : '') + '</div>'
           : '<p class="recall-hint">빈칸에 들어갈 영어 단어를 떠올려 보세요</p>');
-    } else if (cur.mode === 'mean') { // 덤: 영어를 보고 뜻을 쓴다
+    } else if (cur.mode === 'mean') { // 쓰기: 영어를 보고 뜻을 쓴다
       body = kicker + '<div class="headword-row"><h2 class="headword ' + headwordClass(c.w) + '">' + esc(c.w) + '</h2>' + speakBtn + '</div>' +
         (c.pos ? '<p class="pos">' + esc(c.pos) + '</p>' : '');
       if (cur.verdict) {
@@ -1536,8 +1596,8 @@
         '<p class="type-hint">' + esc(hint) + '</p>';
       if (cur.verdict) {
         body += '<p class="verdict ' + (cur.verdict.ok ? 'ok' : 'no') + '">' +
-          (cur.verdict.ok ? (cur.verdict.exact ? '맞았어요' : '거의 맞았어요. 철자를 확인하세요') : '정답은 이거예요') +
-          (!cur.verdict.ok && cur.typed ? '<span class="typed">' + esc(cur.typed) + '</span>' : '') + '</p>' +
+          (cur.verdict.ok ? (cur.verdict.exact ? '맞았어요' : '거의 맞았어요. 철자를 확인하세요') : cur.verdict.near ? '한 글자가 달라요' : '정답은 이거예요') +
+          (!cur.verdict.ok && cur.typed ? '<span class="typed' + (cur.verdict.near ? ' near' : '') + '">' + (cur.verdict.near ? diffHTML(cur.typed, cur.verdict.target) : esc(cur.typed)) + '</span>' : '') + '</p>' +
           '<div class="headword-row"><h2 class="headword ' + headwordClass(c.w) + '">' + esc(c.w) + '</h2>' + speakBtn + '</div>' + answerBlock;
       } else {
         body += '<form class="type-field" data-form="type"><input id="type-input" type="text" inputmode="latin" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="영어로 써 보세요" aria-label="영어 단어 입력"></form>';
@@ -1587,7 +1647,7 @@
   function tightAns(s) { return s.replace(/[ '\-]/g, ''); } // 띄어쓰기·하이픈·작은따옴표 차이는 따지지 않는다
   function dropLead(s) { return s.replace(/^(to|be|a|an|the) /, ''); }
   /* 영어 답 채점: 대소문자·띄어쓰기·하이픈·앞에 붙인 to/be는 따지지 않는다.
-     정답이 여러 개(/ , ;)면 하나만 맞아도 되고, 7글자 이상은 한 글자 오타까지 맞은 걸로 친다 */
+     정답이 여러 개(/ , ;)면 하나만 맞아도 된다. 1.0.11부터 한 글자만 달라도 틀린 걸로 치고(near), 어디가 다른지 보여 준다 */
   function checkTyped(input, word) {
     var a = normalizeAns(input);
     if (!a) return { ok: false };
@@ -1602,9 +1662,17 @@
     }
     for (var j = 0; j < vs.length; j++) {
       var w = tightAns(dropLead(vs[j]));
-      if (w.length >= 7 && (lev(a1, w) <= 1 || lev(a2, w) <= 1)) return { ok: true, exact: false };
+      if (w.length >= 4 && (lev(a1, w) <= 1 || lev(a2, w) <= 1)) return { ok: false, near: true, target: vs[j] };
     }
     return { ok: false };
+  }
+  // 한 글자 다른 답에서 다른 자리를 표시한다: 앞뒤로 같은 부분을 빼고 남는 곳. 글자가 빠졌으면 빈 네모를 넣는다
+  function diffHTML(typed, target) {
+    var a = String(typed).trim(), al = a.toLowerCase(), bl = String(target || '').toLowerCase();
+    var p = 0; while (p < al.length && p < bl.length && al.charAt(p) === bl.charAt(p)) p++;
+    var q = 0; while (q < al.length - p && q < bl.length - p && al.charAt(al.length - 1 - q) === bl.charAt(bl.length - 1 - q)) q++;
+    var mid = a.slice(p, a.length - q);
+    return esc(a.slice(0, p)) + '<mark class="diff">' + (mid ? esc(mid) : '&#9647;') + '</mark>' + esc(a.slice(a.length - q));
   }
   /* 한국어 뜻 채점: 띄어쓰기·문장부호·조사를 따지지 않는다 ('배포를 하다' = '배포하다').
      뜻이 여러 개면 하나만 써도 되고, 괄호 안 말은 써도 안 써도 된다. 뜻이 같은 다른 말은 가리지 못한다 */
@@ -1766,7 +1834,7 @@
     html += '<div class="spacer"></div><div class="btns">';
     if (!plan.rec.att && !plan.restDay && (remainToday > 0 || hasPendingLearning())) html += '<button class="btn primary wide" data-act="study">이어서 하기</button>';
     else if (remainToday > 0) html += '<button class="btn quiet wide" data-act="study">남은 카드도 하기</button>';
-    var bb = bonusButton('toeic'); // 오늘 카드를 다 꺼냈으면 덤이 열린다
+    var bb = bonusButton('toeic'); // 오늘 카드를 다 꺼냈으면 쓰기가 열린다
     html += bb + '<button class="btn ' + (!bb && (plan.rec.att || plan.restDay) ? 'primary' : 'quiet') + ' wide" data-act="close-overlay">홈으로</button></div></div>';
     openOverlay('result', html);
   }
@@ -1924,7 +1992,7 @@
       if (rec && rec.att) {
         var full = bonusOn(rec);
         cls += ' att' + (full ? ' full' : ''); inner = sealSVG(String(d), '', dayRot(k), '', full) + inner; monthCount++; if (full) fullCount++;
-        label += (mj ? ' 전공 출석' : ' 출석') + (full ? ', 덤까지' : '');
+        label += (mj ? ' 전공 출석' : ' 출석') + (full ? ', 쓰기까지' : '');
       }
       else if (isRestDay(k)) { cls += ' rest' + (k > key ? ' later' : ''); inner = '<span class="moon">' + ICON.moon + '</span>' + inner; label += ' 쉬는 날'; }
       else if (rec && rec.rest) { inner = '<span class="mark"></span>' + inner; monthCount++; label += ' 할 카드가 없던 날'; }
@@ -1932,8 +2000,8 @@
       if (k === key) cls += ' today';
       html += '<div class="' + cls + '" aria-label="' + esc(label) + '">' + inner + '</div>';
     }
-    html += '</div><div class="cal-legend"><span>' + sealSVG('출석', '', -6) + '출석</span><span>' + sealSVG('출석', '', -6, '', true) + '덤까지</span><span><i class="k moon">' + ICON.moon + '</i>쉬는 날</span><span><i class="k"></i>할 카드가 없던 날</span><span><i class="k freeze"></i>휴식권 사용</span></div>';
-    html += '<dl class="facts four"><div><dt>이번 달 출석</dt><dd>' + monthCount + '일</dd></div><div><dt>그중 덤까지</dt><dd>' + fullCount + '일</dd></div><div><dt>지금 연속</dt><dd>' + st.count + '일</dd></div><div><dt>최장 연속</dt><dd>' + Math.max((mj ? DB.meta.bestStreakMajor : DB.meta.bestStreak) || 0, st.count) + '일</dd></div></dl>';
+    html += '</div><div class="cal-legend"><span>' + sealSVG('출석', '', -6) + '출석</span><span>' + sealSVG('출석', '', -6, '', true) + '쓰기까지</span><span><i class="k moon">' + ICON.moon + '</i>쉬는 날</span><span><i class="k"></i>할 카드가 없던 날</span><span><i class="k freeze"></i>휴식권 사용</span></div>';
+    html += '<dl class="facts four"><div><dt>이번 달 출석</dt><dd>' + monthCount + '일</dd></div><div><dt>그중 쓰기까지</dt><dd>' + fullCount + '일</dd></div><div><dt>지금 연속</dt><dd>' + st.count + '일</dd></div><div><dt>최장 연속</dt><dd>' + Math.max((mj ? DB.meta.bestStreakMajor : DB.meta.bestStreak) || 0, st.count) + '일</dd></div></dl>';
 
     // 앞으로 7일 복습
     var rows = [], max = 1;
@@ -2208,8 +2276,8 @@
       restDowRow(s) +
       row('복습 양', '많이 하면 덜 까먹고, 적게 하면 시간이 덜 들어요.', seg('retention', [[0.85, '적게'], [0.9, '보통'], [0.95, '많이']], s.retention)) +
       row('짧게 공부하는 시간', '홈에서 \'' + s.shortMinutes + '분만\'을 누르면 이 시간만큼만 공부해요.', seg('shortMinutes', [[3, '3분'], [5, '5분'], [10, '10분']], s.shortMinutes)) +
-      row('문제 섞어 내기', '익숙한 단어는 가끔 예문 빈칸으로 나와요. 직접 쓰기는 덤에서 해요.', sw('mix', s.mix, '문제 섞어 내기')) +
-      row('복습 많을 때 새 단어 줄이기', '밀린 복습이 쌓이면 새 단어를 자동으로 줄여요.', sw('autoReduce', s.autoReduce, '복습 많을 때 새 단어 줄이기')) +
+      row('문제 섞어 내기', '복습에서 한 번이라도 맞힌 단어는 가끔 예문 빈칸으로 나와요. 직접 써 보는 건 쓰기 단계에서 해요.', sw('mix', s.mix, '문제 섞어 내기')) +
+      row('복습 많을 때 새 단어 줄이기', '켜면 밀린 복습이 쌓일 때 새 단어를 자동으로 줄여요. 끄면 정한 수만큼 매일 나와요. 전공에도 같이 적용돼요.', sw('autoReduce', s.autoReduce, '복습 많을 때 새 단어 줄이기')) +
       row('효과음', '', sw('sound', s.sound, '효과음')) +
       row('단어 자동으로 읽어 주기', '', sw('autoSpeak', s.autoSpeak, '단어 자동으로 읽어 주기')) +
       '</section>';
@@ -2219,9 +2287,10 @@
       row('전공 출석 기준', '전공 카드를 이만큼 풀거나, 오늘 전공 카드를 다 끝내면 전공 도장을 찍어요.', seg('majorMin', [[5, '5'], [10, '10'], [20, '20']], s.majorMin)) +
       '</section>';
 
-    html += '<section class="group"><h2>덤 (직접 써 보기)</h2>' +
-      row('덤 단어 수', '오늘 카드를 다 꺼내면 덤이 열려요. 오늘 맞힌 단어 가운데 이만큼을 써 봐요. 토익과 전공에 따로 적용돼요.', seg('bonusCount', [[5, '5'], [10, '10'], [20, '20'], [0, '전부']], s.bonusCount)) +
-      row('덤에서 쓸 것', '뜻을 보고 영어를 쓸지, 영어를 보고 뜻을 쓸지 골라요. 틀려도 복습 일정은 바뀌지 않아요.', seg('bonusMode', [['en', '영어'], ['ko', '뜻'], ['mix', '번갈아']], s.bonusMode)) +
+    html += '<section class="group"><h2>쓰기 (직접 써 보기)</h2>' +
+      row('쓰기 단어 수', '오늘 카드를 다 꺼내면 쓰기 단계가 열려요. \'새 단어만큼\'은 하루 새 단어 수와 같은 수예요(토익 ' + bonusCountForSame('toeic') + '개, 전공 ' + bonusCountForSame('major') + '개). 토익과 전공에 따로 적용돼요.',
+        seg('bonusPick', [['same', '새 단어만큼'], [10, '10'], [20, '20'], [0, '전부']], s.bonusSame ? 'same' : s.bonusCount)) +
+      row('무엇을 쓸지', '뜻을 보고 영어를 쓸지, 영어를 보고 뜻을 쓸지 골라요. 틀려도 복습 일정은 바뀌지 않고, 틀린 단어는 맞힐 때까지 다시 나와요.', seg('bonusMode', [['en', '영어'], ['ko', '뜻'], ['mix', '번갈아']], s.bonusMode)) +
       '</section>';
 
     var ns = Native.notifStatus();
@@ -2254,6 +2323,7 @@
       (hasSample ? row('체험용 10단어', '', '<button class="btn small quiet" data-act="remove-sample">빼기</button>') : row('체험용 10단어', '', '<button class="btn small quiet" data-act="load-sample">넣기</button>')) +
       row('앱 버전', Native.canUpdate ? '새 버전이 나오면 여기서 바로 설치할 수 있어요. 기록은 그대로 남아요.' : '', '<span class="muted small">' + esc(Native.version()) + '</span>') +
       '<div class="btn-list">' + (Native.canUpdate ? '<button class="btn quiet wide" data-act="update-check">업데이트 확인</button>' : '') +
+      '<button class="btn quiet wide" data-act="guide">설명서 보기</button>' +
       '<button class="btn quiet wide" data-act="changes">업데이트 내역 보기</button></div>' +
       '<div class="btn-list"><button class="btn danger-text" data-act="wipe">모든 기록 지우기</button></div></section>';
     return html;
@@ -2351,6 +2421,11 @@
     },
     'seg': function (el) {
       var name = el.dataset.name, v = el.dataset.v;
+      if (name === 'bonusPick') { // 쓰기 단어 수: '새 단어만큼'이거나 정한 수. 오늘 이미 시작한 쓰기의 목표는 그대로 둔다
+        DB.settings.bonusSame = v === 'same';
+        if (v !== 'same') DB.settings.bonusCount = parseInt(v, 10);
+        saveNow(); render(); return;
+      }
       DB.settings[name] = name === 'retention' ? parseFloat(v) : name === 'bonusMode' ? v : parseInt(v, 10);
       if (name === 'minAnswers' && checkAttendance(todayPlan())) toast('기준을 채워서 오늘 출석 도장을 찍었어요.');
       if (name === 'majorMin' && checkMajorAttendance(majorPlan())) toast('기준을 채워서 오늘 전공 도장을 찍었어요.');
@@ -2363,6 +2438,8 @@
       saveNow(); render();
       toast(next.length ? '내일부터 ' + DOW[v] + '요일에 쉬어요.' + (moved ? ' 그날 복습 ' + moved + '장은 앞뒤 날로 옮겼어요.' : '') : '쉬는 요일을 없앴어요. 내일부터 매일 공부해요.');
     },
+    'lownew-off': function () { DB.meta.lowNewOff = toeicCardCount(); saveNow(); render(); toast('새 단어장을 넣을 때까지 이 알림을 안 보여 드려요.'); },
+    'guide': function () { closeAllModals(); openGuide(); },
     'notif-on': function () { Native.requestNotif(); },
     'exact-alarm': function () { Native.openExactAlarm(); },
     'battery': function () { Native.requestBattery(); },
@@ -2666,5 +2743,5 @@
     isRestDay: isRestDay, passWindow: passWindow, reviewStats: reviewStats, josa: josa, rebalanceRestDays: rebalanceRestDays,
     paceStats: paceStats, estMinutes: estMinutes, fmtMin: fmtMin, songPlan: songPlan, isFreeDeck: isFreeDeck, hasCards: hasCards,
     majorPlan: majorPlan, deckTrack: deckTrack, hasMajorCards: hasMajorCards, majorFresh: majorFresh, setTab: setTab, homeTrack: homeTrack, majorLook: majorLook, get state() { return state; },
-    checkMeaning: checkMeaning, bonusState: bonusState, bonusPool: bonusPool, startBonus: startBonus, trackFinished: trackFinished, appVer: appVer, openChanges: openChanges, get session() { return S; } };
+    checkMeaning: checkMeaning, bonusState: bonusState, bonusPool: bonusPool, startBonus: startBonus, trackFinished: trackFinished, appVer: appVer, openChanges: openChanges, openGuide: openGuide, passedReview: passedReview, chooseMode: chooseMode, retentionLine: retentionLine, bonusCountFor: bonusCountFor, lowNewNotice: lowNewNotice, get session() { return S; } };
 })();

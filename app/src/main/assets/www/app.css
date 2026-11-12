@@ -485,7 +485,7 @@ section.today { margin: 6px 0 0; } /* 홈의 '오늘 꺼낼 카드' 칸에만 (�
 .songs-head .page-title { margin-bottom: 16px; }
 .songs-ball { line-height: 0; margin: -6px 0 6px; }
 
-/* 1.0.10: 덤(직접 써 보기), 꽉 찬 도장, 업데이트 내역 */
+/* 1.0.10: 쓰기 단계(그때 이름은 덤), 꽉 찬 도장, 업데이트 내역 */
 .prompt-ko.long { font-size: 20px; line-height: 1.5; }
 .type-field input.ko { font-family: var(--font-ko); font-size: 20px; }
 .verdict .typed.ko { font-family: var(--font-ko); }
@@ -506,3 +506,9 @@ section.today { margin: 6px 0 0; } /* 홈의 '오늘 꺼낼 카드' 칸에만 (�
 .chg-list { margin: 8px 0 0; padding: 0 0 0 18px; color: var(--ink-2); font-size: 15px; line-height: 1.6; }
 .chg-list li { margin: 0 0 4px; }
 .sheet .chg-list { margin-bottom: 4px; }
+
+/* 1.0.11: 설명서, 쓰기에서 한 글자 다른 자리 */
+.guide .chg h3 { font-size: 18px; }
+.chg p.g { margin: 8px 0 0; color: var(--ink-2); font-size: 15px; line-height: 1.6; }
+.verdict .typed.near { text-decoration: none; color: var(--ink-2); }
+mark.diff { background: none; color: var(--stamp); font-weight: 700; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; padding: 0 1px; }
