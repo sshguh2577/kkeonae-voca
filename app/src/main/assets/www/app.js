@@ -24,7 +24,8 @@
     majorMin: 10, // 전공 출석 기준(문제 수)
     bonusSame: true, // 쓰기 단어 수를 그 갈래의 하루 새 단어 수와 같게 (토익 30, 전공은 과목별 수의 두 배)
     bonusCount: 10, // bonusSame이 꺼졌을 때: 갈래마다 하루에 써 볼 단어 수 (0이면 오늘 맞힌 단어 전부)
-    bonusMode: 'en' // 쓰기 방식: en 뜻 보고 영어 쓰기, ko 영어 보고 뜻 쓰기, mix 번갈아
+    bonusMode: 'en', // 쓰기 방식: en 뜻 보고 영어 쓰기, ko 영어 보고 뜻 쓰기, mix 번갈아
+    readSize: 1 // 지문 글자 크기: 0 작게, 1 보통, 2 크게 (지문 화면 오른쪽 위 '가' 단추)
   };
   // 검사용 스위치: 1.0.10까지의 검사를 그때의 처음 값(하루 15개, 줄이기 켬, 쓰기 10개)으로 돌릴 때만 쓴다. 앱에서는 켜지지 않는다
   if (window.__kvLegacyDefaults) { DEFAULT_SETTINGS.newPerDay = 15; DEFAULT_SETTINGS.autoReduce = true; DEFAULT_SETTINGS.bonusSame = false; }
@@ -771,6 +772,8 @@
     cards().forEach(function (c) { if (!hit && (inDaily(c) || inMajor(c)) && String(c.w).toLowerCase() === w) hit = c.m; });
     return hit;
   }
+  var READ_SIZES = ['작게', '보통', '크게'];
+  function readSize() { var n = DB.settings.readSize; return n === 0 || n === 2 ? n : 1; }
   function openRead(id) {
     if (!DB.reads || !DB.reads[id]) return;
     state.readId = id; state.readKo = false; state.readWord = '';
@@ -787,7 +790,9 @@
       return readGloss(r, k) ? '<span role="button" tabindex="0" class="rw' + (state.readWord === k ? ' on' : '') + '" data-act="read-word" data-w="' + esc(k) + '">' + esc(tok) + '</span>' : esc(tok); // 단추가 아니라 글자 조각으로 둔다(쉼표가 다음 줄로 떨어지지 않게)
     }).join('');
     var g = state.readWord ? readGloss(r, state.readWord) : '';
-    overlay.innerHTML = '<div class="view read-view" style="padding-bottom:28px"><div class="cal-head" style="grid-template-columns:44px 1fr 44px"><button class="icon-btn" data-act="close-overlay" aria-label="뒤로">' + ICON.back + '</button><h2>오늘의 지문</h2><span></span></div>' +
+    var rs = readSize();
+    overlay.innerHTML = '<div class="view read-view rs' + rs + '" style="padding-bottom:28px"><div class="cal-head" style="grid-template-columns:44px 1fr 44px"><button class="icon-btn" data-act="close-overlay" aria-label="뒤로">' + ICON.back + '</button><h2>오늘의 지문</h2>' +
+      '<button class="icon-btn read-size" data-act="read-size" aria-label="글자 크기 바꾸기. 지금은 ' + READ_SIZES[rs] + '"><span aria-hidden="true">가</span><b aria-hidden="true">가</b></button></div>' +
       '<p class="read-kicker"><span class="badge read-' + r.cat + '">' + READ_CATS[r.cat] + '</span>' + esc(r.title) + '</p>' +
       '<div class="read-card"><p class="read-en">' + text + '</p>' +
       '<p class="read-gloss" aria-live="polite">' + (g ? '<b>' + esc(state.readWord) + '</b>' + esc(g) : '밑줄 친 낱말을 누르면 뜻이 나와요.') + '</p>' +
@@ -2624,6 +2629,9 @@
     'read-open': function (el) { openRead(el.dataset.id); },
     'read-word': function (el) { state.readWord = state.readWord === el.dataset.w ? '' : el.dataset.w; renderRead(); },
     'read-ko': function () { state.readKo = !state.readKo; renderRead(); },
+    'read-size': function () { // 보통 → 크게 → 작게 → 보통. 고른 크기는 설정에 남는다. 글자가 바로 바뀌어 보이므로 알림 글은 띄우지 않는다
+      DB.settings.readSize = (readSize() + 1) % 3; saveSoon(); renderRead();
+    },
     'read-done': function () {
       var id = state.readId;
       if (!DB.readLog) DB.readLog = {};
