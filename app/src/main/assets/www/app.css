@@ -165,6 +165,13 @@ button { cursor: pointer; }
 .seal-rest.later { opacity: .5; }
 .result-stamp .seal-rest svg { width: 30px; height: 30px; }
 .seal-empty.pass { border-style: dashed; border-color: var(--ink-3); }
+/* 폭이 아주 좁은 화면(340px 아래): 주간 도장 일곱 개가 화면 밖으로 4px 나가 화면이 옆으로 밀리던 것을 막는다 */
+@media (max-width: 339px) {
+  .week { gap: 2px; }
+  .week .seal, .week .seal-empty, .week .seal-rest { width: 36px; height: 36px; }
+  .track-btn { gap: 5px; padding: 0 8px 0 6px; font-size: 16px; } /* '토익', '전공' 글자가 한 글자씩 꺾이던 것 */
+  .track-btn .n { padding: 1px 6px; }
+}
 
 /* 오늘 카드 묶음 */
 section.today { margin: 6px 0 0; } /* 홈의 '오늘 꺼낼 카드' 칸에만 (달력·도장 줄의 오늘 칸까지 밀리지 않게) */
@@ -374,11 +381,18 @@ section.today { margin: 6px 0 0; } /* 홈의 '오늘 꺼낼 카드' 칸에만 (�
 /* ---------- 설정 ---------- */
 .group { margin: 26px 0 0; }
 .group h2 { font-size: 15px; color: var(--ink-3); font-weight: 700; margin: 0 0 4px; }
-.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--line); min-height: 56px; }
-.row .label { flex: 1; }
+/* 설정 한 줄: 글(.label)과 단추(.ctl). 글이 줄 폭의 55%를 못 얻으면 단추가 아래 줄로 내려가 글이 좁게 눌리지 않는다.
+   아래 줄로 내려간 단추 칸은 줄 폭을 다 쓴다: 고르는 단추는 폭만큼 늘어나고, 시간과 스위치는 양 끝에 놓인다. */
+.row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 12px; padding: 13px 0; border-bottom: 1px solid var(--line); min-height: 56px; }
+.row .label { flex: 999 1 55%; min-width: 0; }
 .row .label p { margin: 0; }
 .row .label .desc { font-size: 13px; color: var(--ink-3); margin-top: 2px; }
-.row.col { flex-direction: column; align-items: stretch; gap: 10px; }
+.row .ctl { flex: 1 0 auto; max-width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.row.wide .label { flex-basis: 100%; }
+.row .ctl > .seg { flex: 1 1 auto; }
+.row .ctl > .seg button { flex: 1 1 auto; }
+.row.col { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 10px; }
+.row.col .label { flex: none; }
 .row.col > .desc { font-size: 13px; color: var(--ink-3); margin: 0; }
 .seg.days { display: flex; }
 .seg.days button { flex: 1; padding: 8px 0; }
@@ -467,7 +481,7 @@ section.today { margin: 6px 0 0; } /* 홈의 '오늘 꺼낼 카드' 칸에만 (�
   color: var(--ink-2); font-weight: 700; font-size: 17px; touch-action: manipulation;
 }
 .track-btn .ball { flex: none; }
-.track-btn .t { flex: 1; text-align: left; }
+.track-btn .t { flex: 1; text-align: left; white-space: nowrap; }
 .track-btn .n { font-size: 13px; padding: 1px 8px; border-radius: 99px; background: var(--blue-wash); color: var(--ink); white-space: nowrap; }
 .track-btn .n.done { background: transparent; box-shadow: inset 0 0 0 1.5px var(--stamp); color: var(--stamp); }
 .track-btn[aria-pressed="true"] { background: var(--blue); color: var(--on-blue); box-shadow: none; }
@@ -512,3 +526,41 @@ section.today { margin: 6px 0 0; } /* 홈의 '오늘 꺼낼 카드' 칸에만 (�
 .chg p.g { margin: 8px 0 0; color: var(--ink-2); font-size: 15px; line-height: 1.6; }
 .verdict .typed.near { text-decoration: none; color: var(--ink-2); }
 mark.diff { background: none; color: var(--stamp); font-weight: 700; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; padding: 0 1px; }
+
+/* 1.0.12: 색을 뜻이 있는 자리에만 더한다. 노랑(형광펜) = 오늘 할 것, 빨강(도장색) = 출석, 초록 = 머리에 남은 단어 */
+:root { --hl: #FFE072; --amber-wash: #FFE7B0; --amber-ink: #6B4700; }
+@media (prefers-color-scheme: dark) { :root { --hl: #6B5814; --amber-wash: #4A3A12; --amber-ink: #F3D58A; } }
+.example b { color: var(--ink); background: linear-gradient(transparent 50%, var(--hl) 50%, var(--hl) 92%, transparent 92%); padding: 0 3px; margin: 0 -1px; border-radius: 3px; }
+.badge.new { background: var(--amber-wash); box-shadow: none; color: var(--amber-ink); }
+.streak-line strong { color: var(--stamp); }
+.hlnum { background: linear-gradient(transparent 58%, var(--hl) 58%, var(--hl) 93%, transparent 93%); padding: 0 7px; margin-left: -7px; border-radius: 3px; }
+.week li.is-today .dow { box-shadow: inset 0 -7px 0 var(--hl); padding: 0 6px; }
+.memory .lead strong { color: var(--good); }
+
+/* 1.0.12: 오늘의 지문 */
+.reads { margin: 26px 0 0; }
+.reads .lead { margin: 0 0 8px; font-size: 14px; color: var(--ink-3); }
+.reads .lead strong { font-size: 17px; font-weight: 800; color: var(--ink); margin-right: 8px; }
+.read-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.read-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 54px; padding: 8px 14px; border: 0; border-radius: 14px; background: var(--card); box-shadow: inset 0 0 0 1px var(--card-edge); color: var(--ink); font: inherit; text-align: left; touch-action: manipulation; }
+button.read-row:active { background: var(--field); }
+li.read-row.none { color: var(--ink-3); font-size: 14px; background: transparent; box-shadow: inset 0 0 0 1px var(--line); }
+.read-title { flex: 1; font-weight: 700; }
+.read-done { font-size: 13px; color: var(--good); font-weight: 700; }
+.badge.read-civ { background: var(--major-wash); }
+.badge.read-fin { background: var(--blue-wash); }
+.badge.read-hobby { background: var(--amber-wash); color: var(--amber-ink); }
+.read-kicker { display: flex; align-items: center; gap: 8px; margin: 8px 0 12px; font-weight: 800; font-size: 19px; }
+.read-card { padding: 20px 20px 16px; border-radius: 14px; background: var(--card); box-shadow: inset 0 0 0 1px var(--card-edge), var(--shadow-card); }
+.read-en { font-family: var(--font-en); font-size: 20px; line-height: 1.8; margin: 0; }
+.rw { cursor: pointer; text-decoration: underline dotted var(--ink-3); text-decoration-thickness: 1.5px; text-underline-offset: 5px; touch-action: manipulation; }
+.rw.on { background: var(--hl); border-radius: 3px; text-decoration: none; }
+.read-gloss { margin: 14px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--field); color: var(--ink-2); font-size: 15px; min-height: 44px; }
+.read-gloss b { font-family: var(--font-en); font-size: 17px; color: var(--ink); margin-right: 8px; }
+.read-ko { margin: 12px 0 0; color: var(--ink-2); font-size: 15.5px; line-height: 1.7; }
+.read-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 16px 0 10px; }
+
+/* 1.0.12: 설정의 쉬는 기간 */
+.break-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 10px; }
+.break-form label { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--ink-2); }
+.break-form input[type="date"] { font: inherit; font-size: 15px; min-height: 40px; padding: 0 8px; border-radius: 10px; border: 1.5px solid var(--line); background: var(--card); color: var(--ink); }
