@@ -180,6 +180,49 @@ public class MainActivity extends Activity {
         }
     }
 
+    /* ---------- 오늘의 지문: 깃허브에 올려 둔 지문 파일을 받아 화면 쪽에 넘긴다 ---------- */
+    private static final String READS_URL = "https://raw.githubusercontent.com/sshguh2577/kkeonae-voca/reads/reads.json";
+    private static final int READS_MAX_BYTES = 3 * 1024 * 1024; // 지문 파일은 글자뿐이라 작다. 이보다 크면 잘못된 것으로 본다
+    private volatile boolean readsBusy = false;
+
+    /** 글 파일을 받는다. 정해 둔 크기를 넘으면 그만둔다. */
+    private static String httpTextMax(String url, int maxBytes) throws IOException {
+        HttpURLConnection c = openGet(url, 15000);
+        try {
+            if (c.getResponseCode() != 200) throw new IOException("HTTP " + c.getResponseCode());
+            try (InputStream in = c.getInputStream()) {
+                ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    bo.write(buf, 0, n);
+                    if (bo.size() > maxBytes) throw new IOException("too large");
+                }
+                return new String(bo.toByteArray(), StandardCharsets.UTF_8).trim();
+            }
+        } finally {
+            c.disconnect();
+        }
+    }
+
+    /** 지문 파일을 받아 화면에 넘긴다. 성공하면 'reads'와 글, 실패하면 'reads-fail'. 화면 쪽(app.js)이 내용을 확인하고 넣는다. */
+    private void fetchReadsAsync() {
+        if (readsBusy) {
+            return;
+        }
+        readsBusy = true;
+        new Thread(() -> {
+            try {
+                String text = httpTextMax(READS_URL, READS_MAX_BYTES);
+                notifyJs("reads", text);
+            } catch (Exception e) {
+                notifyJs("reads-fail", "");
+            } finally {
+                readsBusy = false;
+            }
+        }).start();
+    }
+
     private void checkUpdateAsync() {
         new Thread(() -> {
             JSONObject o = new JSONObject();
@@ -646,6 +689,12 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void downloadUpdate() {
             downloadUpdateAsync();
+        }
+
+        /** 깃허브에 올려 둔 지문 파일을 받는다. 결과는 window.__native('reads', 글) 또는 ('reads-fail', '')로 간다. */
+        @JavascriptInterface
+        public void fetchReads() {
+            fetchReadsAsync();
         }
 
         @JavascriptInterface

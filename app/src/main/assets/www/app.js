@@ -25,7 +25,8 @@
     bonusSame: true, // 쓰기 단어 수를 그 갈래의 하루 새 단어 수와 같게 (토익 30, 전공은 과목별 수의 두 배)
     bonusCount: 10, // bonusSame이 꺼졌을 때: 갈래마다 하루에 써 볼 단어 수 (0이면 오늘 맞힌 단어 전부)
     bonusMode: 'en', // 쓰기 방식: en 뜻 보고 영어 쓰기, ko 영어 보고 뜻 쓰기, mix 번갈아
-    readSize: 1 // 지문 글자 크기: 0 작게, 1 보통, 2 크게 (지문 화면 오른쪽 위 '가' 단추)
+    readSize: 1, // 지문 글자 크기: 0 작게, 1 보통, 2 크게 (지문 화면 오른쪽 위 '가' 단추)
+    readAuto: true // 지문 자동 받기: 하루에 한 번, 앱을 켤 때 새 지문을 받아 온다 (폰 앱에서만)
   };
   // 검사용 스위치: 1.0.10까지의 검사를 그때의 처음 값(하루 15개, 줄이기 켬, 쓰기 10개)으로 돌릴 때만 쓴다. 앱에서는 켜지지 않는다
   if (window.__kvLegacyDefaults) { DEFAULT_SETTINGS.newPerDay = 15; DEFAULT_SETTINGS.autoReduce = true; DEFAULT_SETTINGS.bonusSame = false; }
@@ -130,7 +131,9 @@
       versionCode: function () { return has && A.versionCode ? safe(function () { return A.versionCode(); }, 0) : 0; },
       checkUpdate: function () { if (has && A.checkUpdate) A.checkUpdate(); },
       downloadUpdate: function () { if (has && A.downloadUpdate) A.downloadUpdate(); },
-      installUpdate: function () { if (has && A.installUpdate) A.installUpdate(); }
+      installUpdate: function () { if (has && A.installUpdate) A.installUpdate(); },
+      canFetchReads: has && typeof A.fetchReads === 'function',
+      fetchReads: function () { if (has && A.fetchReads) A.fetchReads(); } // 결과는 window.__native('reads', 글) 또는 ('reads-fail')로 온다
     };
   })();
 
@@ -697,33 +700,88 @@
     });
     openOverlay('changes', html + '</div>');
   }
-  /* ================= 오늘의 지문 (1.0.12) =================
-     지문 파일(kind: 'kkeonae-read')로 넣는다. 출석·도장·문제 수와는 상관없다.
-     DB.reads = { id: { id, cat: 'civ' | 'fin' | 'hobby', title, en, ko, words: [그 지문에 든 단어장 낱말], gloss: { 낱말: 뜻 }, ord } }
-     DB.readLog = { id: { n: 읽은 횟수, at: 마지막으로 읽은 때 } }, DB.meta.readDay = { key, major, hobby } (하루 동안 같은 지문) */
+  /* ================= 오늘의 지문 (1.0.12, 자동 받기는 1.0.14) =================
+     지문은 두 길로 들어온다. 폰 앱은 깃허브에 올려 둔 지문 파일을 하루에 한 번 받아 오고, 지문 파일(kind: 'kkeonae-read')을 직접 넣을 수도 있다.
+     출석·도장·문제 수와는 상관없다.
+     DB.reads = { id: { id, cat: 'civ' | 'fin' | 'hobby', title, en, ko, gloss: { 낱말: 뜻 }, ord,
+                        need: 이 지문이 맞춰 쓰인 Day 번호 (그 Day까지 다 배우면 나온다. 없으면 언제나 나온다),
+                        words: [예전 파일에만 있음: 그 지문에 든 단어장 낱말. 모두 배웠어야 나온다] } }
+     DB.readLog = { id: { n: 읽은 횟수, at: 마지막으로 읽은 때 } }, DB.meta.readDay = { key, major, hobby } (하루 동안 같은 지문)
+     DB.meta.readSync = { okKey: 마지막으로 받은 날, okAt: 그때, n: 올라와 있던 지문 수, rev, tryAt: 마지막으로 받아 보려던 때 } */
   var READ_CATS = { civ: '토목', fin: '금융', hobby: '취미' };
-  function importReads(obj) {
-    var n = 0;
-    if (!DB.reads) DB.reads = {};
-    var ord = Object.keys(DB.reads).length;
-    (obj.items || []).forEach(function (r) {
-      var id = str(r && r.id), en = str(r && r.en), ko = str(r && r.ko);
-      if (!id || !en || !ko || !READ_CATS[r.cat]) return;
-      var old = DB.reads[id];
-      DB.reads[id] = { id: id, cat: r.cat, title: str(r.title) || en.slice(0, 30), en: en, ko: ko,
-        words: (Array.isArray(r.words) ? r.words : []).map(function (w) { return String(w).toLowerCase(); }),
-        gloss: r.gloss && typeof r.gloss === 'object' ? r.gloss : {}, ord: old ? old.ord : ord++ };
-      n++;
+  var READ_MAX = { items: 3000, en: 4000, ko: 4000, title: 120, gloss: 400, glossVal: 200 };
+  // 그 이름을 '직접' 갖고 있는가. 낱말이 constructor처럼 자바스크립트가 원래 갖고 있는 이름과 같아도 헷갈리지 않게 한다
+  function own(o, k) { return !!o && Object.prototype.hasOwnProperty.call(o, k); }
+  // 지문 하나를 다듬는다. 쓸 수 없으면 null. (받아 온 글자는 화면에 그릴 때 모두 esc를 거친다)
+  function cleanRead(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    var id = str(raw.id), en = str(raw.en), ko = str(raw.ko), cat = str(raw.cat);
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.\-]{0,59}$/.test(id) || (id in Object.prototype)) return null;
+    if (!en || !ko || !own(READ_CATS, cat) || en.length > READ_MAX.en || ko.length > READ_MAX.ko) return null;
+    var gloss = {}, n = 0;
+    if (raw.gloss && typeof raw.gloss === 'object') Object.keys(raw.gloss).forEach(function (k) {
+      var v = raw.gloss[k], key = String(k).toLowerCase();
+      if (typeof v !== 'string' || !v.trim() || !key || key.length > 60 || n >= READ_MAX.gloss) return;
+      gloss[key] = v.trim().slice(0, READ_MAX.glossVal); n++;
     });
-    return n;
+    var r = { id: id, cat: cat, title: (str(raw.title) || en.slice(0, 30)).slice(0, READ_MAX.title), en: en, ko: ko, gloss: gloss };
+    var need = +raw.need;
+    if (need >= 1 && need <= 99 && need === Math.floor(need)) r.need = need;
+    // words는 비어 있어도 꼭 넣는다: 1.0.13까지의 코드는 이 칸이 없으면 멈춘다 (예전 버전으로 되돌렸을 때를 위해)
+    r.words = Array.isArray(raw.words) ? raw.words.slice(0, 60).map(function (w) { return String(w).toLowerCase(); }) : [];
+    return r;
   }
-  // 이미 배운 단어(토익·전공): 낱말 -> 카드
+  function readSig(r) { // 내용이 같은지 견주는 데 쓴다 (차례 ord는 뺀다)
+    return JSON.stringify([r.cat, r.title, r.en, r.ko, r.need || 0, (r.words || []).join(','), Object.keys(r.gloss || {}).sort().map(function (k) { return k + '=' + r.gloss[k]; }).join('|')]);
+  }
+  // 지문 묶음을 넣는다. 같은 id는 내용을 새것으로 바꾸고(읽은 기록과 차례는 그대로), 처음 보는 id는 뒤에 붙인다
+  function importReads(obj) {
+    var res = { added: 0, updated: 0, same: 0, dropped: 0, total: 0 };
+    if (!DB.reads) DB.reads = {};
+    var ord = 0;
+    values(DB.reads).forEach(function (x) { if (x.ord >= ord) ord = x.ord + 1; });
+    (obj && Array.isArray(obj.items) ? obj.items : []).slice(0, READ_MAX.items).forEach(function (raw) {
+      var r = cleanRead(raw);
+      if (!r) return;
+      res.total++;
+      var old = own(DB.reads, r.id) ? DB.reads[r.id] : null;
+      r.ord = old ? old.ord : ord++;
+      if (!old) res.added++;
+      else if (readSig(old) === readSig(r)) { res.same++; return; }
+      else res.updated++;
+      DB.reads[r.id] = r;
+    });
+    // 올린 쪽에서 빼 달라고 적어 둔 지문 (읽은 기록은 남긴다)
+    (obj && Array.isArray(obj.drop) ? obj.drop : []).slice(0, 500).forEach(function (id) { id = str(id); if (own(DB.reads, id)) { delete DB.reads[id]; res.dropped++; } });
+    return res;
+  }
+  // 이미 배운 단어(토익·전공): 낱말 -> 카드. (부를 때마다 아래 dayDone의 기억도 새로 시작한다: 지문을 고르기 전에 늘 이것부터 부른다)
+  var dayDoneMemo = {};
   function learnedWords() {
-    var m = {};
+    var m = Object.create(null);
+    dayDoneMemo = {};
     cards().forEach(function (c) { if (!c.sus && c.st !== 0 && (inDaily(c) || inMajor(c))) m[String(c.w).toLowerCase()] = c; });
     return m;
   }
-  function readReady(r, learned) { for (var i = 0; i < r.words.length; i++) { if (!learned[r.words[i]]) return false; } return true; }
+  // 그 Day까지 다 배웠는가: Day 번호가 n 이하인 토익 단어장의 낱말을 한 번씩은 다 꺼내 봤어야 한다.
+  // 그 Day 단어장을 아직 안 넣었으면 '아직'이다. 빼 둔 낱말과 잠시 멈춘 단어장의 낱말은 세지 않는다.
+  function dayDone(n) {
+    if (own(dayDoneMemo, n)) return dayDoneMemo[n];
+    var has = false, left = false;
+    values(DB.decks).forEach(function (d) { if (d.day === n && deckTrack(d.id) === 'toeic') has = true; });
+    if (has) cards().forEach(function (c) {
+      if (left || c.sus || c.st !== 0 || !inDaily(c) || deckPaused(c.deck)) return;
+      var d = DB.decks[c.deck];
+      if (d && d.day != null && d.day <= n) left = true;
+    });
+    return (dayDoneMemo[n] = has && !left);
+  }
+  function readReady(r, learned) {
+    var w = r.words || [];
+    for (var i = 0; i < w.length; i++) { if (!learned[w[i]]) return false; } // 예전 파일: 적어 둔 낱말을 모두 배웠어야
+    if (r.need && !dayDone(r.need)) return false;
+    return true;
+  }
   // 그 갈래에서 지금 읽을 수 있는 지문 하나: 안 읽은 것 먼저(넣은 순서), 다 읽었으면 읽은 지 가장 오래된 것
   function pickRead(cat, learned) {
     var log = DB.readLog || {}, best = null;
@@ -737,19 +795,26 @@
   // 오늘의 두 지문: 전공 지식 글(토목과 금융을 하루씩 번갈아)과 취미 글
   function todayReads() {
     if (!DB.reads || !Object.keys(DB.reads).length) return null;
-    var key = todayKey(), d = DB.meta.readDay, learned = null;
+    var key = todayKey(), d = DB.meta.readDay, learned = null, log = DB.readLog || {};
+    var L = function () { return learned || (learned = learnedWords()); };
     if (!d || d.key !== key) d = DB.meta.readDay = { key: key, major: null, hobby: null };
     var first = F.daysBetweenKeys('2026-01-01', key) % 2 === 0 ? 'civ' : 'fin';
-    if (!d.major || !DB.reads[d.major]) {
-      learned = learnedWords();
-      d.major = pickRead(first, learned) || pickRead(first === 'civ' ? 'fin' : 'civ', learned);
+    // 예전에 읽은 지문을 다시 보여 주던 중인데(오늘은 아직 안 읽음), 공부하거나 새로 받아서 그 갈래에 안 읽은 지문이 생겼으면 그것으로 바꾼다
+    var newer = function (id, cat) {
+      if (!own(log, id) || readOn(id, key)) return null;
+      var alt = pickRead(cat, L());
+      return alt && alt !== id && !own(log, alt) ? alt : null;
+    };
+    if (!d.major || !own(DB.reads, d.major)) {
+      d.major = pickRead(first, L()) || pickRead(first === 'civ' ? 'fin' : 'civ', L());
     } else if (DB.reads[d.major].cat !== first && !readOn(d.major, key)) {
       // 오늘 차례인 갈래에 읽을 지문이 없어서 다른 갈래를 보여 주던 중이면, 공부해서 읽을 수 있게 됐을 때 차례인 갈래로 바꾼다 (이미 읽었으면 그대로)
-      learned = learnedWords();
-      var alt = pickRead(first, learned);
+      var alt = pickRead(first, L());
       if (alt) d.major = alt;
     }
-    if (!d.hobby || !DB.reads[d.hobby]) d.hobby = pickRead('hobby', learned || learnedWords());
+    if (d.major) { var m2 = newer(d.major, DB.reads[d.major].cat); if (m2) d.major = m2; }
+    if (!d.hobby || !own(DB.reads, d.hobby)) d.hobby = pickRead('hobby', L());
+    else { var h2 = newer(d.hobby, 'hobby'); if (h2) d.hobby = h2; }
     return d;
   }
   function readOn(id, key) { var l = (DB.readLog || {})[id]; return !!l && F.dayKey(l.at, dsh()) === key; } // 그날 읽었는가
@@ -766,11 +831,33 @@
       row(d.major, '지금까지 배운 단어로 읽을 수 있는 전공 지문이 아직 없어요.') + row(d.hobby, '지금까지 배운 단어로 읽을 수 있는 취미 지문이 아직 없어요.') + '</ul></section>';
   }
   // 낱말 뜻: 지문에 적어 둔 뜻이 먼저, 없으면 단어장에서 찾는다
-  function readGloss(r, w) {
-    if (r.gloss[w]) return String(r.gloss[w]);
-    var hit = '';
-    cards().forEach(function (c) { if (!hit && (inDaily(c) || inMajor(c)) && String(c.w).toLowerCase() === w) hit = c.m; });
-    return hit;
+  function readGloss(r, w, deckM) {
+    if (own(r.gloss, w) && typeof r.gloss[w] === 'string' && r.gloss[w]) return r.gloss[w];
+    return deckGloss(deckM || deckMeanings(), w);
+  }
+  // 낱말의 기본 꼴 후보: -s, -ed, -ing 같은 꼬리를 떼어 본다 (긴 것부터). 받아 온 지문에는 단어장 낱말의 뜻이 없어서, 폰 안의 단어장에서 찾는다
+  function baseForms(w) {
+    var o = [], n = w.length;
+    if (n > 4 && /ies$/.test(w)) o.push(w.slice(0, -3) + 'y');
+    if (n > 4 && /ied$/.test(w)) o.push(w.slice(0, -3) + 'y');
+    if (n > 2 && /s$/.test(w)) o.push(w.slice(0, -1));
+    if (n > 3 && /es$/.test(w)) o.push(w.slice(0, -2));
+    if (n > 3 && /ed$/.test(w)) { o.push(w.slice(0, -1)); o.push(w.slice(0, -2)); if (n > 5 && w.charAt(n - 3) === w.charAt(n - 4)) o.push(w.slice(0, -3)); }
+    if (n > 4 && /ing$/.test(w)) { o.push(w.slice(0, -3) + 'e'); o.push(w.slice(0, -3)); if (n > 6 && w.charAt(n - 4) === w.charAt(n - 5)) o.push(w.slice(0, -4)); }
+    return o;
+  }
+  function deckGloss(deckM, w) { // 단어장에 그대로 있으면 그 뜻, 꼬리를 떼어야 찾아지면 '뜻 (기본 꼴)'
+    if (deckM[w]) return deckM[w];
+    var c = baseForms(w);
+    for (var i = 0; i < c.length; i++) { if (deckM[c[i]]) return deckM[c[i]] + ' (' + c[i] + ')'; }
+    return '';
+  }
+  function deckMeanings() { // 토익·전공 단어장의 낱말 -> 뜻 (지문 화면을 그릴 때 한 번 만든다). 두 단어장에 다 있는 낱말은 토익 쪽 뜻을 쓴다
+    var m = Object.create(null), all = cards();
+    [inDaily, inMajor].forEach(function (inTrack) {
+      all.forEach(function (c) { if (inTrack(c)) { var k = String(c.w).toLowerCase(); if (!m[k]) m[k] = String(c.m || ''); } });
+    });
+    return m;
   }
   var READ_SIZES = ['작게', '보통', '크게'];
   function readSize() { var n = DB.settings.readSize; return n === 0 || n === 2 ? n : 1; }
@@ -784,12 +871,13 @@
     var r = DB.reads && DB.reads[state.readId];
     if (!r) { closeOverlay(); return; }
     var log = (DB.readLog || {})[r.id];
+    var deckM = deckMeanings();
     var text = r.en.split(/([A-Za-z][A-Za-z'’\-]*)/).map(function (tok, i) {
       if (i % 2 === 0) return esc(tok);
       var k = tok.toLowerCase().replace(/’/g, "'").replace(/'s$/, '');
-      return readGloss(r, k) ? '<span role="button" tabindex="0" class="rw' + (state.readWord === k ? ' on' : '') + '" data-act="read-word" data-w="' + esc(k) + '">' + esc(tok) + '</span>' : esc(tok); // 단추가 아니라 글자 조각으로 둔다(쉼표가 다음 줄로 떨어지지 않게)
+      return readGloss(r, k, deckM) ? '<span role="button" tabindex="0" class="rw' + (state.readWord === k ? ' on' : '') + '" data-act="read-word" data-w="' + esc(k) + '">' + esc(tok) + '</span>' : esc(tok); // 단추가 아니라 글자 조각으로 둔다(쉼표가 다음 줄로 떨어지지 않게)
     }).join('');
-    var g = state.readWord ? readGloss(r, state.readWord) : '';
+    var g = state.readWord ? readGloss(r, state.readWord, deckM) : '';
     var rs = readSize();
     overlay.innerHTML = '<div class="view read-view rs' + rs + '" style="padding-bottom:28px"><div class="cal-head" style="grid-template-columns:44px 1fr 44px"><button class="icon-btn" data-act="close-overlay" aria-label="뒤로">' + ICON.back + '</button><h2>오늘의 지문</h2>' +
       '<button class="icon-btn read-size" data-act="read-size" aria-label="글자 크기 바꾸기. 지금은 ' + READ_SIZES[rs] + '"><span aria-hidden="true">가</span><b aria-hidden="true">가</b></button></div>' +
@@ -949,7 +1037,7 @@
     } else { deck.title = title; if (!deck.track) deck.track = track; }
     if (deck.track === 'song') { deck.free = true; if (info.song) deck.song = str(info.song); if (info.artist) deck.artist = str(info.artist); }
     if (deck.track === 'major') deck.major = info.major === 'civ' ? 'civ' : (deck.major || 'fin');
-    var byWord = {}, baseOrd = 0;
+    var byWord = Object.create(null), baseOrd = 0; // 빈 표에서 시작한다: 'constructor' 같은 낱말이 '이미 있는 낱말'로 잘못 잡히지 않게
     cards().forEach(function (c) { if (c.deck === deckId) { byWord[c.w.toLowerCase()] = c; baseOrd = Math.max(baseOrd, (c.ord || 0) + 1); } });
     var added = 0, updated = 0;
     words.forEach(function (raw, i) {
@@ -967,7 +1055,7 @@
   }
   function importPatch(obj) {
     var items = obj.words || obj.items || [];
-    var byWord = {};
+    var byWord = Object.create(null);
     cards().forEach(function (c) { byWord[c.w.toLowerCase()] = c; });
     var n = 0;
     items.forEach(function (raw) {
@@ -1063,7 +1151,7 @@
       return;
     }
     if (obj && obj.kind === 'kkeonae-read') { // 지문 파일은 어느 가져오기 단추로 넣어도 된다
-      var rn = importReads(obj); saveNow(); closeAllModals(); render();
+      var rn = importReads(obj).total; saveNow(); closeAllModals(); render();
       toast(rn ? '지문 ' + rn + '개를 넣었어요. 첫 화면의 오늘의 지문에서 볼 수 있어요.' : '파일에서 지문을 찾지 못했어요.');
       return;
     }
@@ -2471,10 +2559,15 @@
       row('전공 출석 기준', '전공 카드를 이만큼 풀거나, 오늘 전공 카드를 다 끝내면 전공 도장을 찍어요.', seg('majorMin', [[5, '5'], [10, '10'], [20, '20']], s.majorMin)) +
       '</section>';
 
-    var rn = Object.keys(DB.reads || {}).length, rr = Object.keys(DB.readLog || {}).length;
+    var rn = Object.keys(DB.reads || {}).length, rr = values(DB.reads || {}).filter(function (x) { return own(DB.readLog || {}, x.id); }).length, rsy = DB.meta.readSync || {};
+    var readState = (rn ? '지문 ' + rn + '개 가운데 ' + rr + '개를 읽었어요. ' : '') + '첫 화면에 하루 두 가지(전공 지식 글, 취미 글)가 나와요. 출석과는 상관없어요.';
     html += '<section class="group"><h2>오늘의 지문</h2>' +
-      row('지문 파일', (rn ? '넣어 둔 지문 ' + rn + '개 가운데 ' + rr + '개를 읽었어요. ' : '지문 파일을 넣으면 ') + '첫 화면에 하루 두 가지(전공 지식 글, 취미 글)가 나와요. 출석과는 상관없어요.',
-        '<button class="btn small quiet" data-act="import-file" data-target="toeic">가져오기</button>') + '</section>';
+      (Native.canFetchReads
+        ? row('지문 자동 받기', '하루에 한 번, 앱을 켤 때 새 지문이 있으면 받아 와요. ' + (rsy.okAt ? '마지막으로 받은 때는 ' + josa(whenLabel(rsy.okAt), '이에요/예요') + '.' : '아직 받은 적이 없어요.'), sw('readAuto', s.readAuto !== false, '지문 자동 받기')) +
+          row('새 지문 확인', readState, '<button class="btn small quiet" data-act="reads-sync">지금 확인</button>') +
+          row('지문 파일', '파일로 받은 지문을 직접 넣을 수도 있어요.', '<button class="btn small quiet" data-act="import-file" data-target="toeic">가져오기</button>')
+        : row('지문 파일', (rn ? '' : '지문 파일을 넣으면 ') + readState, '<button class="btn small quiet" data-act="import-file" data-target="toeic">가져오기</button>')) +
+      '</section>';
     html += '<section class="group"><h2>쓰기 (직접 써 보기)</h2>' +
       row('쓰기 단어 수', '오늘 카드를 다 꺼내면 쓰기 단계가 열려요. \'새 단어만큼\'은 하루 새 단어 수와 같은 수예요(토익 ' + bonusCountForSame('toeic') + '개, 전공 ' + bonusCountForSame('major') + '개). 토익과 전공에 따로 적용돼요.',
         seg('bonusPick', [['same', '새 단어만큼'], [10, '10'], [15, '15'], [20, '20'], [0, '전부']], s.bonusSame ? 'same' : s.bonusCount)) +
@@ -2627,6 +2720,7 @@
       toast(next.length ? '내일부터 ' + DOW[v] + '요일에 쉬어요.' + (moved ? ' 그날 복습 ' + moved + '장은 앞뒤 날로 옮겼어요.' : '') : '쉬는 요일을 없앴어요. 내일부터 매일 공부해요.');
     },
     'read-open': function (el) { openRead(el.dataset.id); },
+    'reads-sync': function () { syncReads(true); },
     'read-word': function (el) { state.readWord = state.readWord === el.dataset.w ? '' : el.dataset.w; renderRead(); },
     'read-ko': function () { state.readKo = !state.readKo; renderRead(); },
     'read-size': function () { // 보통 → 크게 → 작게 → 보통. 고른 크기는 설정에 남는다. 글자가 바로 바뀌어 보이므로 알림 글은 띄우지 않는다
@@ -2868,6 +2962,8 @@
       return;
     }
     if (evt === 'update-done') { onUpdateDone(arg); return; }
+    if (evt === 'reads') { onReadsText(arg); return; }
+    if (evt === 'reads-fail') { onReadsFail(); return; }
     if (evt === 'picked') {
       var text = Native.takePicked();
       if (!text) { if (arg) toast('빈 파일이에요.'); return; }
@@ -2889,6 +2985,7 @@
     else if (evt === 'resume') {
       if (todayKey() !== lastDayRendered && !S) { lastDayRendered = todayKey(); render(); }
       else if (!S && !state.overlay) render();
+      syncReads(false); // 날이 바뀌었거나 아까 못 받았으면 지문을 받아 본다
     } else if (evt === 'pause') { saveNow(); }
   };
   window.__handleBack = function () {
@@ -2903,8 +3000,45 @@
     if (loadProblem) return;
     var mv = checkTimeZone(); // 앱을 켜 둔 채로 시차가 있는 곳에 다녀온 경우
     if (mv.length) { saveNow(); render(); toast(moveToast(mv)); }
+    syncReads(false);
   });
   window.addEventListener('pagehide', saveNow);
+
+  /* ---------- 지문 자동 받기 (1.0.14) ----------
+     하루에 한 번, 앱을 켜거나 다시 볼 때 깃허브에 올려 둔 지문 파일을 받아 온다. 받는 일은 폰 쪽이 하고(MainActivity의 fetchReads), 여기서는 언제 받을지와 받은 글을 넣는 일을 한다.
+     인터넷이 안 되면 조용히 넘어가고 10분 뒤부터 다시 해 본다. 설정에서 끌 수 있고, '지금 확인'으로 바로 받아 볼 수도 있다. */
+  var readFetchAt = 0, readFetchLoud = false;
+  function syncReads(loud) {
+    if (!Native.canFetchReads || loadProblem) { if (loud) toast('지문 받기는 폰 앱에서만 돼요.'); return false; }
+    var s = DB.meta.readSync || (DB.meta.readSync = {}), now = Date.now();
+    if (!loud) {
+      if (DB.settings.readAuto === false) return false;
+      if (s.okKey === todayKey()) return false;                                   // 오늘은 이미 받았다
+      if (s.tryAt && now >= s.tryAt && now - s.tryAt < 10 * 60000) return false;   // 방금 해 봤으면 10분 뒤에 다시
+    }
+    if (readFetchAt && now >= readFetchAt && now - readFetchAt < 30000) { if (loud) toast('지금 받고 있어요.'); return false; }
+    readFetchAt = now; readFetchLoud = !!loud;
+    s.tryAt = now; saveSoon();
+    Native.fetchReads();
+    return true;
+  }
+  function onReadsText(text) {
+    var loud = readFetchLoud; readFetchAt = 0; readFetchLoud = false;
+    var obj = null;
+    try { obj = JSON.parse(String(text || '')); } catch (e) { obj = null; }
+    if (!obj || obj.kind !== 'kkeonae-read' || !Array.isArray(obj.items)) { if (loud) toast('받은 지문 파일을 읽지 못했어요. 잠시 뒤에 다시 해 주세요.'); return; }
+    var res = importReads(obj), now = Date.now();
+    DB.meta.readSync = { okKey: todayKey(), okAt: now, n: res.total, rev: +obj.rev || 0, tryAt: now };
+    saveNow();
+    if (!S && !state.overlay && (res.added || res.updated || res.dropped || state.tab === 'settings')) render(); // 공부 중이거나 다른 화면을 보고 있으면 건드리지 않는다
+    if (res.added && !S) toast('새 지문 ' + res.added + '개를 받았어요.');
+    else if (loud) toast(res.updated ? '지문 ' + res.updated + '개를 고친 내용으로 바꿨어요.' : '새 지문은 없어요. 올라와 있는 지문은 ' + res.total + '개예요.');
+  }
+  function onReadsFail() {
+    var loud = readFetchLoud; readFetchAt = 0; readFetchLoud = false;
+    if (loud) toast('지문을 받지 못했어요. 인터넷 연결을 확인해 주세요.');
+  }
+  function whenLabel(ms) { var d = new Date(ms); return shortDate(ms) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
 
   /* ================= 앱 업데이트 ================= */
   var updateSilent = false;
@@ -2953,12 +3087,13 @@
   if (newVer && returningUser) showWhatsNew(newVer);
   if (movedDays.length) toast(moveToast(movedDays));
   setTimeout(autoCheckUpdate, 1500);
+  setTimeout(function () { syncReads(false); }, 2500);
 
   // 테스트용 접근점
   window.__kv = { get db() { return DB; }, parseLines: parseLines, weekMissedIds: weekMissedIds, studyCsv: studyCsv, newQueueCards: newQueueCards, todayPlan: todayPlan, streakAt: streakAt, buildSummary: buildSummary, importText: importText, checkTyped: checkTyped, clozeParts: clozeParts,
     isRestDay: isRestDay, passWindow: passWindow, reviewStats: reviewStats, josa: josa, rebalanceRestDays: rebalanceRestDays,
     paceStats: paceStats, estMinutes: estMinutes, fmtMin: fmtMin, songPlan: songPlan, isFreeDeck: isFreeDeck, hasCards: hasCards,
     majorPlan: majorPlan, deckTrack: deckTrack, hasMajorCards: hasMajorCards, majorFresh: majorFresh, setTab: setTab, homeTrack: homeTrack, majorLook: majorLook, get state() { return state; },
-    checkMeaning: checkMeaning, bonusState: bonusState, bonusPool: bonusPool, startBonus: startBonus, trackFinished: trackFinished, appVer: appVer, openChanges: openChanges, openGuide: openGuide, todayReads: todayReads, readSection: readSection, openRead: openRead, pickRead: pickRead, learnedWords: learnedWords,
+    checkMeaning: checkMeaning, bonusState: bonusState, bonusPool: bonusPool, startBonus: startBonus, trackFinished: trackFinished, appVer: appVer, openChanges: openChanges, openGuide: openGuide, todayReads: todayReads, readGloss: readGloss, baseForms: baseForms, readReady: readReady, dayDone: dayDone, importReads: importReads, syncReads: syncReads, readSection: readSection, openRead: openRead, pickRead: pickRead, learnedWords: learnedWords,
     setBreak: setBreak, clearBreak: clearBreak, currentBreak: currentBreak, inBreak: inBreak, breakHold: breakHold, checkTimeZone: checkTimeZone, isMoveDay: isMoveDay, passedReview: passedReview, chooseMode: chooseMode, retentionLine: retentionLine, bonusCountFor: bonusCountFor, lowNewNotice: lowNewNotice, get session() { return S; } };
 })();
