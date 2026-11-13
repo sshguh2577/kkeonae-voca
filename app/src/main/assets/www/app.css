@@ -229,7 +229,7 @@ section.today { margin: 6px 0 0; } /* 홈의 '오늘 꺼낼 카드' 칸에만 (�
   display: flex; flex-direction: column;
   overflow-y: auto;
 }
-.study { max-width: 560px; width: 100%; margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; padding: 8px 16px 16px; }
+.study { max-width: 560px; width: 100%; margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; padding: 8px 16px 10px; }
 .study-top { display: grid; grid-template-columns: 44px 1fr auto 44px; align-items: center; gap: 8px; height: 52px; }
 .progress { height: 6px; border-radius: 99px; background: var(--blue-wash); overflow: hidden; }
 .progress > span { display: block; height: 100%; background: var(--blue); border-radius: 99px; transition: width .25s ease; }
@@ -273,7 +273,9 @@ section.today { margin: 6px 0 0; } /* 홈의 '오늘 꺼낼 카드' 칸에만 (�
 .verdict.no { color: var(--ink-2); }
 .verdict .typed { font-family: var(--font-en); text-decoration: line-through; color: var(--ink-3); font-weight: 400; margin-left: 6px; }
 
-.study-actions { display: grid; gap: 10px; padding-bottom: 6px; }
+.study-actions { display: grid; gap: 10px; padding-bottom: 12px; }
+/* 1.0.17: 카드 뒷면이 길어 화면을 넘어도(쓰임이 늘 나옴) 답 단추는 화면 아래에 붙어 있고, 글은 그 뒤로 넘겨 본다 */
+.study-actions { position: sticky; bottom: 0; z-index: 2; background: var(--desk); box-shadow: 0 -12px 12px -4px var(--desk); }
 .grade-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .grade-row .btn { flex-direction: column; gap: 0; min-height: 66px; line-height: 1.25; }
 .grade-row .btn small { font-weight: 500; font-size: 13px; opacity: .9; }
@@ -577,3 +579,49 @@ li.read-row.none { color: var(--ink-3); font-size: 14px; background: transparent
 .break-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 10px; }
 .break-form label { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--ink-2); }
 .break-form input[type="date"] { font: inherit; font-size: 15px; min-height: 40px; padding: 0 8px; border-radius: 10px; border: 1.5px solid var(--line); background: var(--card); color: var(--ink); }
+
+/* 1.0.17: 듣고 떠올리기 카드 — 글자 없이 큰 듣기 단추만 보인다 */
+.badge.listen { background: transparent; box-shadow: inset 0 0 0 1.5px var(--blue); color: var(--blue); }
+.listen-stage { display: flex; flex-direction: column; align-items: center; gap: 10px; margin: 14px 0 0; }
+.listen-big { width: 116px; height: 116px; border-radius: 50%; border: 0; background: var(--blue-wash); color: var(--blue); display: inline-flex; align-items: center; justify-content: center; box-shadow: inset 0 0 0 2px var(--blue); transition: transform .08s ease-out; }
+.listen-big svg { width: 50px; height: 50px; }
+.listen-big:active { transform: scale(.95); }
+.listen-again { margin: 0; font-size: 13.5px; color: var(--ink-3); }
+
+/* 1.0.17: 지문에서 눌러 본 낱말 모으기 */
+.tap-saved { display: inline-block; margin-left: 8px; font-size: 12px; font-weight: 700; color: var(--good); vertical-align: 2px; }
+.read-taps { display: flex; align-items: center; justify-content: space-between; width: 100%; margin: 8px 0 0; padding: 12px 14px; border: 0; border-radius: 14px; background: none; box-shadow: inset 0 0 0 1px var(--line); color: var(--ink-2); font: inherit; font-size: 14.5px; }
+.read-taps b { color: var(--ink); }
+.tap-list { list-style: none; margin: 14px 0 0; padding: 0; }
+.tap-item { padding: 14px 0 10px; border-bottom: 1px solid var(--line); }
+.tap-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 10px; }
+.tap-w { font-family: var(--font-en); font-size: 21px; font-weight: 700; color: var(--ink); border: 0; background: none; padding: 0; text-align: left; }
+button.tap-w { text-decoration: underline; text-decoration-color: var(--blue); text-decoration-thickness: 1.5px; text-underline-offset: 4px; }
+.tap-m { color: var(--ink-2); font-size: 15px; }
+.tap-s { font-family: var(--font-en); font-size: 15.5px; line-height: 1.55; color: var(--ink-2); margin: 6px 0 0; }
+.tap-s b { color: var(--ink); box-shadow: inset 0 -0.42em 0 var(--hl); }
+.tap-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 6px 0 0; font-size: 13px; color: var(--ink-3); }
+.tap-meta .btn.text { margin-left: auto; min-height: 40px; padding: 0 4px; font-size: 14px; }
+.tap-none { font-size: 12.5px; }
+
+/* 1.0.17: 토요일 보충과 갈래 시작 전 날짜 */
+.seal-none { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; }
+.seal-none::before { content: ''; width: 14px; height: 2px; border-radius: 2px; background: var(--line); }
+.seal-empty.fill { border: 1.5px dotted var(--good); position: relative; }
+.seal-empty.fill::after { content: ''; position: absolute; left: 50%; top: 46%; width: 9px; height: 5px; border-left: 2px solid var(--good); border-bottom: 2px solid var(--good); transform: translate(-50%, -50%) rotate(-45deg); }
+.seal-empty.wait { border: 1.5px dashed var(--amber-ink, #6B4700); }
+.seal-empty.today.makeup { border: 2px solid var(--amber-ink, #6B4700); background: var(--amber-wash); }
+@media (max-width: 339px) { .week .seal-none { width: 36px; height: 36px; } }
+.cal-cell.before .num { color: var(--ink-3); opacity: .45; }
+.cal-cell .mark.fill { border: 1.5px dotted var(--good); }
+.cal-cell .mark.wait { border: 1.5px dashed var(--amber-ink, #6B4700); }
+.cal-cell.makeup .mark.wait { border-width: 2px; border-style: solid; background: var(--amber-wash); }
+.cal-legend .k.fill { border: 1.5px dotted var(--good); }
+
+/* 1.0.17: 출석 탭 맨 위의 1차 임시 종료일 */
+.goal-card { margin: 4px 0 16px; padding: 12px 14px 13px; border-radius: 14px; background: var(--card); box-shadow: inset 0 0 0 1px var(--card-edge); }
+.goal-k { margin: 0; font-size: 13px; color: var(--ink-3); font-weight: 700; }
+.goal-d { margin: 2px 0 0; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.goal-d b { font-size: 21px; font-weight: 800; color: var(--ink); }
+.goal-d span { font-size: 15px; font-weight: 800; color: var(--blue); font-variant-numeric: tabular-nums; }
+.goal-s { margin: 6px 0 0; font-size: 13.5px; color: var(--ink-2); line-height: 1.5; }

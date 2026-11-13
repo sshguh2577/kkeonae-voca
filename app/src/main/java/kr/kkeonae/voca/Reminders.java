@@ -157,6 +157,50 @@ final class Reminders {
         return false;
     }
 
+    /**
+     * 1.0.17: 오늘이 그 갈래(tr: 토익이면 요약 전체, 전공이면 major)의 '보충할 수 있는 날'인지.
+     * 앱이 오늘 요약을 썼으면 앱이 계산한 값(mk)을 그대로 쓴다. 아니면 지난 6일을 직접 센다:
+     * 쉬는 요일(weekRest)인 오늘 앞 6일 안에, 갈래를 시작한 뒤의 쉬는 날이 아닌 날 가운데 출석 안 한 날이 있으면 보충하는 날이다.
+     * 그 사이에 있던 다른 쉬는 요일에 출석했으면 그날이 하나를 채운 것으로 본다.
+     */
+    private static boolean makeupToday(JSONObject s, JSONObject tr, String today, long now, int dsh) {
+        if (tr == null) {
+            return false;
+        }
+        long gen = s.optLong("generatedAt", 0);
+        if (gen > 0 && today.equals(dayKey(gen, dsh)) && tr.has("mk")) {
+            return tr.optBoolean("mk", false);
+        }
+        JSONArray week = s.optJSONArray("weekRest");
+        if (!contains(week, today)) {
+            return false;
+        }
+        String start = tr.optString("start", "");
+        String from = s.optString("restFrom", "");
+        if (start.isEmpty() || from.isEmpty()) {
+            return false;
+        }
+        JSONArray rest = s.optJSONArray("restDays");
+        JSONArray att = tr.optJSONArray("attended");
+        int miss = 0;
+        int filled = 0;
+        for (int i = 1; i <= 6; i++) {
+            String k = dayKey(now - i * DAY, dsh);
+            if (k.compareTo(start) < 0 || k.compareTo(from) < 0) {
+                continue;
+            }
+            boolean done = contains(att, k);
+            if (contains(rest, k)) {
+                if (done && contains(week, k)) {
+                    filled++;
+                }
+            } else if (!done) {
+                miss++;
+            }
+        }
+        return miss > filled;
+    }
+
     /** 날짜별 값. 그날 값이 없을 때 누적값이면 가장 가까운 이전 날 값을 쓴다. */
     private static int valueFor(JSONObject map, String key, boolean cumulative) {
         if (map == null) {
@@ -259,11 +303,28 @@ final class Reminders {
         } else {
             restDay = isRestDow(s.optJSONArray("restDows"), now, dsh);
         }
+        // 1.0.17: 쉬는 요일이라도 이번 주에 빠진 날이 있으면 그 갈래는 '보충할 수 있는 날'이라 알린다 (토익·전공 따로)
+        boolean makeup = false;
         if (restDay && !test) {
-            return;
+            boolean mkT = needT && makeupToday(s, s, today, now, dsh);
+            boolean mkM = needM && makeupToday(s, mj, today, now, dsh);
+            if (!mkT && !mkM) {
+                return;
+            }
+            needT = mkT;
+            needM = mkM;
+            makeup = true;
         }
         Track t = needT ? track(s, today, 20) : new Track();
         Track m = needM ? track(mj, today, 10) : new Track();
+        if (makeup) { // 쉬는 날로 적어 둔 날이라 새 단어가 0으로 적혀 있으면, 보충하는 날에 나올 수로 바꾼다
+            if (needT && t.fresh == 0) {
+                t.fresh = valueFor(s.optJSONObject("newByMakeup"), today, false);
+            }
+            if (needM && m.fresh == 0) {
+                m.fresh = valueFor(mj.optJSONObject("newByMakeup"), today, false);
+            }
+        }
         int due = t.due;
         int fresh = t.fresh;
         int streak = t.streak;
@@ -358,6 +419,18 @@ final class Reminders {
                     body.append(streak).append("일 연속 출석을 이어 가요. ");
                 }
                 body.append(goal).append("문제만 풀면 오늘 도장을 받아요.");
+            }
+        }
+        if (makeup) {
+            String who = needT && needM ? "" : needT ? "토익 " : "전공 ";
+            if (slot == 1) {
+                title = "오늘은 " + who + "보충할 수 있는 날이에요";
+                body.insert(0, "이번 주에 빠진 날을 오늘 채울 수 있어요.\n");
+            } else {
+                long leftMs = nextDayStart(now, dsh) - now;
+                int hoursLeft = (int) Math.max(1, Math.ceil(leftMs / (double) HOUR));
+                title = who + "보충 마감까지 " + hoursLeft + "시간 남았어요";
+                body.insert(0, "오늘 출석하면 이번 주에 빠진 날이 채워져요.\n");
             }
         }
         if (test) {
