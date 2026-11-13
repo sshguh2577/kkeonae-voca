@@ -240,9 +240,12 @@ section.today { margin: 6px 0 0; } /* 홈의 '오늘 꺼낼 카드' 칸에만 (�
 .badge { font-size: 12.5px; font-weight: 700; padding: 1px 8px; border-radius: 99px; background: var(--blue-wash); color: var(--ink); }
 .badge.new { background: transparent; box-shadow: inset 0 0 0 1px var(--ink-3); color: var(--ink-2); }
 .headword-row { display: flex; align-items: center; justify-content: center; gap: 4px; flex-wrap: wrap; }
-.headword { font-family: var(--font-en); font-size: 44px; font-weight: 700; line-height: 1.15; margin: 0; text-align: center; letter-spacing: .005em; }
-.headword.long { font-size: 34px; }
-.headword.xlong { font-size: 27px; }
+.headword { font-family: var(--font-en); font-size: calc(44px * var(--fit, 1)); font-weight: 700; line-height: 1.15; margin: 0; text-align: center; letter-spacing: .005em; overflow-wrap: break-word; }
+.headword.long { font-size: calc(34px * var(--fit, 1)); }
+.headword.xlong { font-size: calc(27px * var(--fit, 1)); }
+/* 큰 영어 단어 맞추기(app.js fitWord): fit-one은 한 줄로, fit-wrap은 긴 구를 빈칸에서만 고르게 나눈다 */
+.fit-one { white-space: nowrap; }
+.fit-wrap { text-wrap: balance; }
 .pos { text-align: center; color: var(--ink-3); margin: 8px 0 0; font-size: 14px; }
 .prompt-ko { font-size: 25px; font-weight: 700; text-align: center; margin: 0; line-height: 1.4; }
 .recall-hint { text-align: center; color: var(--ink-3); font-size: 14px; margin: auto 0 0; padding-top: 28px; }
@@ -426,7 +429,7 @@ section.today { margin: 6px 0 0; } /* 홈의 '오늘 꺼낼 카드' 칸에만 (�
 .sheet label.field { display: grid; gap: 6px; margin: 12px 0 0; font-size: 14px; color: var(--ink-2); }
 .sheet label.field input, .sheet label.field textarea { width: 100%; border-radius: 10px; border: 1.5px solid var(--line); background: var(--field); padding: 10px 12px; font-size: 16px; font-family: var(--font-ko); }
 .sheet label.field textarea { min-height: 84px; }
-.word-sheet .w { font-family: var(--font-en); font-size: 34px; font-weight: 700; margin: 0; }
+.word-sheet .w { font-family: var(--font-en); font-size: calc(34px * var(--fit, 1)); font-weight: 700; margin: 0; overflow-wrap: break-word; }
 .word-sheet dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 16px 0 0; font-size: 14px; }
 .word-sheet dt { color: var(--ink-3); }
 .word-sheet dd { margin: 0; }

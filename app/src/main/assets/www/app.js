@@ -1804,6 +1804,46 @@
     }
   }
   function headwordClass(w) { return w.length > 16 ? 'xlong' : w.length > 11 ? 'long' : ''; }
+  /* 큰 영어 단어를 한 줄에 맞추기 (1.0.15)
+     카드와 단어 창의 큰 영어 단어가 줄에 안 들어가면 글자를 조금 줄여 한 줄에 넣는다. 단어 중간에서는 끊지 않는다.
+     - 듣기 단추 옆에 두려고 줄이는 것은 처음 크기의 88%까지. 더 줄여야 하면 단추를 아래로 보내고 줄 전체 폭에 맞춘다(글자를 덜 줄인다).
+     - 21px(폰 글자 크기 100% 기준)보다 작아져야 하는 긴 구는 크기를 지키고 빈칸에서만 줄을 바꾼다.
+     - 크기는 CSS 변수 --fit(배율)로 바꾼다. px로 바로 넣으면 폰의 글자 크기 설정이 한 번 더 곱해진다. */
+  var FIT_MIN_PX = 21, FIT_BESIDE = 0.88;
+  function fitBase(el) { return el.classList.contains('xlong') ? 27 : el.classList.contains('long') ? 34 : el.classList.contains('headword') ? 44 : 34; } // app.css의 처음 크기와 같게
+  function fitWord(el) {
+    var row = el.parentNode, t = el.firstChild;
+    if (!row || !t || t.nodeType !== 3 || !t.data) return;
+    el.style.removeProperty('--fit');
+    el.classList.remove('fit-wrap');
+    el.classList.add('fit-one');
+    var rg = document.createRange();
+    rg.selectNodeContents(el);
+    var W = rg.getBoundingClientRect().width, rowW = row.getBoundingClientRect().width;
+    if (!W || !rowW) return; // 안 보일 때는 그대로 두고, 다음에 그릴 때 다시 맞춘다
+    var btn = row.querySelector('.icon-btn'), gap = parseFloat(getComputedStyle(row).columnGap) || 0;
+    var full = rowW - 2, beside = full - (btn ? btn.getBoundingClientRect().width + gap : 0);
+    var min = FIT_MIN_PX / fitBase(el), k = 0;
+    if (W <= beside) return;
+    if (beside / W >= FIT_BESIDE) k = beside / W;
+    else if (full / W >= min) k = Math.min(1, full / W); // 단추만 아래로 내리면 그대로 들어가는 단어는 줄이지 않는다
+    if (k) { if (k < 1) el.style.setProperty('--fit', k.toFixed(4)); return; }
+    // 긴 구: 빈칸에서만 줄을 바꾼다. 두 줄에 들어가게 나누는 자리 가운데 더 긴 줄이 가장 짧은 것을 찾는다
+    var re = /\S+/g, m, ws = [], longest = 0, two = Infinity, i;
+    var wd = function (a, b) { rg.setStart(t, a); rg.setEnd(t, b); return rg.getBoundingClientRect().width; };
+    while ((m = re.exec(t.data))) ws.push([m.index, m.index + m[0].length]);
+    if (ws.length < 2) { el.style.setProperty('--fit', (full / W).toFixed(4)); return; } // 아주 긴 한 낱말은 끊지 않고 더 줄인다
+    for (i = 0; i < ws.length; i++) longest = Math.max(longest, wd(ws[i][0], ws[i][1]));
+    for (i = 0; i < ws.length - 1; i++) two = Math.min(two, Math.max(wd(ws[0][0], ws[i][1]), wd(ws[i + 1][0], ws[ws.length - 1][1])));
+    el.classList.remove('fit-one');
+    el.classList.add('fit-wrap');
+    k = full / two >= min ? Math.min(1, full / two) : Math.min(1, full / longest); // 두 줄이 안 되면 처음 크기로 여러 줄
+    if (k < 1) el.style.setProperty('--fit', k.toFixed(4));
+  }
+  function fitWords(root) {
+    var list = (root || document).querySelectorAll('.headword, .word-sheet .w');
+    for (var i = 0; i < list.length; i++) fitWord(list[i]);
+  }
   function previewLabel(c, g) {
     return F.humanizePreview(F.preview(c, g, Date.now(), studyOpts())) + ' 뒤';
   }
@@ -1888,6 +1928,7 @@
     root.innerHTML = top + '<div class="study-body"><article class="index-card study-card" aria-live="polite">' + body + '</article></div>' +
       '<footer class="study-actions">' + actions + '</footer>';
     updateStudyTop();
+    fitWords(root);
     var inp = document.getElementById('type-input');
     if (inp) setTimeout(function () { inp.focus(); }, 30);
   }
@@ -2458,7 +2499,7 @@
     var c = DB.cards[id];
     if (!c) return;
     var next = c.st === 0 ? '아직 안 배움' : shortDate(c.due);
-    openSheet('<div class="word-sheet"><div class="headword-row" style="justify-content:flex-start"><p class="w">' + esc(c.w) + '</p><button class="icon-btn" data-act="speak" data-text="' + esc(c.w) + '" aria-label="발음 듣기">' + ICON.speak + '</button></div>' +
+    fitWords(openSheet('<div class="word-sheet"><div class="headword-row" style="justify-content:flex-start"><p class="w">' + esc(c.w) + '</p><button class="icon-btn" data-act="speak" data-text="' + esc(c.w) + '" aria-label="발음 듣기">' + ICON.speak + '</button></div>' +
       '<p style="font-size:19px;font-weight:700;color:var(--ink);margin:4px 0 0">' + esc(c.m) + (c.pos ? ' <span class="small muted">' + esc(c.pos) + '</span>' : '') + '</p>' +
       (c.ex ? '<p class="example" style="margin-top:12px">' + exampleHTML(c.ex) + '</p>' : '') +
       (c.exKo ? '<p class="example-ko">' + esc(c.exKo) + '</p>' : '') +
@@ -2469,7 +2510,7 @@
       '<button class="btn quiet small" data-act="word-suspend" data-id="' + esc(c.id) + '">' + (c.sus ? '보류 풀기' : '보류하기') + '</button>' +
       '<button class="btn quiet small" data-act="word-reset" data-id="' + esc(c.id) + '">처음부터 다시</button>' +
       '<button class="btn danger-text small" data-act="word-delete" data-id="' + esc(c.id) + '">지우기</button></div>' +
-      '<p class="hint">보류한 단어는 복습에 나오지 않아요.</p></div>');
+      '<p class="hint">보류한 단어는 복습에 나오지 않아요.</p></div>'));
   }
   function openWordAdd(deckId) {
     var d = DB.decks[deckId]; if (!d) return;
@@ -3003,6 +3044,10 @@
     syncReads(false);
   });
   window.addEventListener('pagehide', saveNow);
+  // 영어 글꼴을 다 받거나 화면 폭이 바뀌면 큰 영어 단어의 크기를 다시 맞춘다
+  if (document.fonts && document.fonts.addEventListener) document.fonts.addEventListener('loadingdone', function () { fitWords(); });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { fitWords(); });
+  window.addEventListener('resize', function () { fitWords(); });
 
   /* ---------- 지문 자동 받기 (1.0.14) ----------
      하루에 한 번, 앱을 켜거나 다시 볼 때 깃허브에 올려 둔 지문 파일을 받아 온다. 받는 일은 폰 쪽이 하고(MainActivity의 fetchReads), 여기서는 언제 받을지와 받은 글을 넣는 일을 한다.
