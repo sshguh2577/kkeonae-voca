@@ -531,6 +531,11 @@
      단어 기록: bn 써 본 횟수, bk 맞힌 횟수, bAt 마지막으로 써 본 때, bm 틀린 채로 남은 때(맞히면 지운다) */
   function trackRecOf(key, track) { var d = DB.days[key]; return (track === 'major' ? (d && d.mj) : d) || null; } // 읽기만 (없으면 null)
   function bonusOn(rec) { return !!(rec && rec.b && rec.b.done); }
+  // 쓰기를 뺀 카드만의 문제 수와 시간 (1.0.16). 쓰기는 처음 답이 문제 수(a)에, 다시 쓴 것까지 시간(ms)에 들어가 있다.
+  // 1.0.10부터 쓰기 기록(b.n, b.ms)이 a, ms와 같이 늘었으므로 빼면 카드만 남는다
+  function cardOnlyA(rec) { var b = rec && rec.b; return Math.max(0, ((rec && rec.a) || 0) - ((b && b.n) || 0)); }
+  function cardOnlyMs(rec) { var b = rec && rec.b; return Math.max(0, ((rec && rec.ms) || 0) - ((b && b.ms) || 0)); }
+  function typeMs(rec) { return (rec && rec.b && rec.b.ms) || 0; }
   function bonusRec(track) { var r = track === 'major' ? mjRec(todayKey()) : dayRec(todayKey()); if (!r.b) r.b = { n: 0, ok: 0, ms: 0 }; return r.b; }
   // 그 갈래의 오늘 카드를 다 꺼냈는가 (쓰기가 열리는 조건)
   function trackFinished(track) {
@@ -655,7 +660,7 @@
     var missed = Object.keys(s.missed).filter(function (id) { return DB.cards[id]; });
     var rot = dayRot(key) + (mj ? 4 : 0);
     var html = '<div class="result"><h2>' + (s.first ? (mj ? '전공 ' : '') + '쓰기 ' + s.first + '개를 했어요' : '틀렸던 단어 ' + (s.fixed || 0) + '개를 고쳤어요') + '</h2>' +
-      '<p class="lead">' + (s.first ? '맞음 ' + s.firstOk + '개, 틀림 ' + (s.first - s.firstOk) + '개. ' : '') + '복습 일정은 바뀌지 않았어요.</p>' + timeLine(s.ms, rec.ms);
+      '<p class="lead">' + (s.first ? '맞음 ' + s.firstOk + '개, 틀림 ' + (s.first - s.firstOk) + '개. ' : '') + '복습 일정은 바뀌지 않았어요.</p>' + bonusTimeLine(s.ms, typeMs(rec));
     if (b.done) html += '<div class="result-stamp">' + sealSVG(mj ? '전공' : '출석', '', rot, '', true) + '<p><strong>오늘 ' + (mj ? '전공 ' : '') + '쓰기까지 끝냈어요</strong>오늘 도장이 꽉 찬 도장이 됐어요.</p></div>';
     else html += '<div class="result-stamp">' + sealSVG(mj ? '전공' : '출석', '', rot) + '<p><strong>' + (st.open ? (st.fresh ? '쓰기 ' + st.left + '개가 남았어요' : '틀린 단어 ' + st.redo + '개를 아직 못 고쳤어요') : '쓰기가 아직 남았어요') + '</strong>' + (st.open ? '마저 하면 오늘 도장이 꽉 찬 도장이 돼요.' : '오늘 카드를 다 꺼내면 이어서 할 수 있어요.') + '</p></div>';
     if (missed.length) {
@@ -805,7 +810,9 @@
       var alt = pickRead(cat, L());
       return alt && alt !== id && !own(log, alt) ? alt : null;
     };
-    if (!d.major || !own(DB.reads, d.major)) {
+    // 골라 둔 지문이 그사이 읽을 수 없는 지문이 됐으면(새로 받은 파일에서 기준이 바뀜) 다시 고른다. 오늘 이미 읽었으면 그대로 둔다 (1.0.16)
+    var gone = function (id) { return !id || !own(DB.reads, id) || (!readOn(id, key) && !readReady(DB.reads[id], L())); };
+    if (gone(d.major)) {
       d.major = pickRead(first, L()) || pickRead(first === 'civ' ? 'fin' : 'civ', L());
     } else if (DB.reads[d.major].cat !== first && !readOn(d.major, key)) {
       // 오늘 차례인 갈래에 읽을 지문이 없어서 다른 갈래를 보여 주던 중이면, 공부해서 읽을 수 있게 됐을 때 차례인 갈래로 바꾼다 (이미 읽었으면 그대로)
@@ -813,7 +820,7 @@
       if (alt) d.major = alt;
     }
     if (d.major) { var m2 = newer(d.major, DB.reads[d.major].cat); if (m2) d.major = m2; }
-    if (!d.hobby || !own(DB.reads, d.hobby)) d.hobby = pickRead('hobby', L());
+    if (gone(d.hobby)) d.hobby = pickRead('hobby', L());
     else { var h2 = newer(d.hobby, 'hobby'); if (h2) d.hobby = h2; }
     return d;
   }
@@ -1444,7 +1451,7 @@
     else if (plan.reduced) desc += ' 복습이 많아서 오늘 새 단어를 ' + plan.rec.cap + '장으로 줄였어요.';
     var goal = DB.settings.minAnswers;
     var meter;
-    if (plan.rec.att) meter = bonusOn(plan.rec) ? '<p class="meter-label">' + sealSVG('출석', '', -8, '', true) + '오늘 쓰기까지 끝냈어요.</p>'
+    if (plan.rec.att) meter = bonusOn(plan.rec) ? '<p class="meter-label">' + sealSVG('출석', '', -8, '', true) + '오늘 쓰기까지 끝냈어요. 쓰기는 ' + fmtMin(typeMs(plan.rec)) + ' 걸렸어요.</p>'
       : '<p class="meter-label">' + sealSVG('출석', '', -8) + '오늘 출석했어요. 더 하면 내일이 가벼워져요.</p>';
     else if (plan.restDay) meter = '<p class="meter-label">쉬는 날이라 공부를 안 해도 연속 기록이 이어져요.</p>';
     else if (plan.rec.rest) meter = '<p class="meter-label">할 카드가 없는 날이라 출석으로 쳐 줘요.</p>';
@@ -1460,7 +1467,7 @@
 
     return '<section class="streak">' + streakLine + ws.html + '<p class="freeze-note">' + ws.note + '</p></section>' +
       '<section class="today"><div class="stack' + (total < 2 ? ' single' : '') + '"><div class="index-card has-mascot">' +
-      '<p class="card-kicker"><span>오늘 꺼낼 카드</span><span>' + (plan.rec.a ? '오늘 ' + fmtMin(plan.rec.ms) + ' 동안 ' + plan.rec.a + '문제' : '') + '</span></p>' +
+      '<p class="card-kicker"><span>오늘 꺼낼 카드</span><span>' + (cardOnlyA(plan.rec) ? '오늘 ' + fmtMin(cardOnlyMs(plan.rec)) + ' 동안 ' + cardOnlyA(plan.rec) + '문제' : '') + '</span></p>' +
       '<div class="mascot">' + ballSVG('lib', mood, 92) + '</div>' +
       headHTML(headClass, headline) +
       '<p class="today-desc">' + esc(desc) + '</p>' + meter +
@@ -1497,7 +1504,7 @@
     if (mp.hold) desc += ' 쉬는 기간 뒤라서, 밀린 전공 복습을 다 풀 때까지 새 단어를 멈췄어요.';
     else if (mp.reduced) desc += ' 전공 복습이 많아서 새 단어를 과목별 ' + m.cap + '장으로 줄였어요.';
     var goal = s.majorMin, meter;
-    if (m.att) meter = bonusOn(m) ? '<p class="meter-label">' + sealSVG('전공', '', -8, '', true) + '오늘 전공 쓰기까지 끝냈어요.</p>'
+    if (m.att) meter = bonusOn(m) ? '<p class="meter-label">' + sealSVG('전공', '', -8, '', true) + '오늘 전공 쓰기까지 끝냈어요. 쓰기는 ' + fmtMin(typeMs(m)) + ' 걸렸어요.</p>'
       : '<p class="meter-label">' + sealSVG('전공', '', -8) + '오늘 전공 출석했어요.</p>';
     else if (mp.restDay) meter = '<p class="meter-label">쉬는 날이라 안 해도 전공 연속 기록이 이어져요.</p>';
     else if (m.rest) meter = '<p class="meter-label">할 전공 카드가 없는 날이라 출석으로 쳐 줘요.</p>';
@@ -1513,7 +1520,7 @@
     return '<div class="major-home track-major"><section class="streak"><p class="streak-line">' +
       (ws.streak > 0 ? '<strong>' + ws.streak + '일</strong> 전공 연속 출석' : '오늘 첫 전공 도장을 찍어 보세요') + '</p>' + ws.html + '<p class="freeze-note">' + ws.note + '</p></section>' +
       '<section class="today"><div class="stack' + (total < 2 ? ' single' : '') + '"><div class="index-card major-card has-mascot">' +
-      '<p class="card-kicker"><span>오늘 꺼낼 전공 카드</span><span>' + (m.a ? '오늘 ' + fmtMin(m.ms) + ' 동안 ' + m.a + '문제' : '') + '</span></p>' +
+      '<p class="card-kicker"><span>오늘 꺼낼 전공 카드</span><span>' + (cardOnlyA(m) ? '오늘 ' + fmtMin(cardOnlyMs(m)) + ' 동안 ' + cardOnlyA(m) + '문제' : '') + '</span></p>' +
       '<button class="mascot" data-act="mascot" aria-label="' + (look === 'fin' ? '금융 옷이에요. 누르면 토목 옷으로 바뀌어요' : '토목 옷이에요. 누르면 금융 옷으로 바뀌어요') + '">' + ballSVG(look, mood, 92) + '</button>' +
       headHTML(headClass, headline) + '<p class="today-desc">' + esc(desc) + '</p>' + meter + '</div></div>' +
       '<div class="home-actions one">' + (bbm || '<button class="btn ' + (mp.restDay && !m.a ? 'quiet' : 'primary') + '" data-act="major-study" ' + (canStudy ? '' : 'disabled') + '>' + (mp.restDay ? '전공 복습만 하기' : '전공 공부 시작') + '</button>') + '</div>' +
@@ -1582,6 +1589,19 @@
   function retrNow(c, now) { return c.last ? F.retrievability((now - c.last) / DAY, c.S || 0.1) : 0; }
   // 카드 한 장에 쓴 시간: 카드가 뜬 뒤 답할 때까지. 자리를 비운 시간이 들어가지 않게 한 장에 90초까지만 센다
   function answerMs(now) { return Math.max(0, Math.min(now - S.cur.shownAt, 90000)); }
+  // 앱을 내린 동안(다른 앱, 화면 꺼짐)은 공부 시간을 세지 않는다 (1.0.16)
+  // 카드 시간은 카드를 보여 준 때(shownAt)부터 답할 때까지라서, 나갔다 온 만큼 shownAt을 뒤로 민다. '짧게 하기'의 끝나는 때도 같이 민다
+  var awayAt = 0;
+  function clockAway() { awayAt = Date.now(); } // 나가는 신호가 두 번 와도(앱 pause, 화면 hidden) 몇 ms 차이라 마지막 것을 쓴다
+  function clockBack() {
+    if (!awayAt) return;
+    var now = Date.now(), from = awayAt, f;
+    awayAt = 0;
+    if (!S) return;
+    // 나간 때가 카드를 띄운 때(공부를 시작한 때)보다 앞이면 그때부터만 뺀다
+    if (S.cur) { f = Math.max(from, S.cur.shownAt); if (now > f) S.cur.shownAt += now - f; }
+    if (S.deadline) { f = Math.max(from, S.startedAt || from); if (now > f) S.deadline += now - f; }
+  }
   function recSnap(rec) { return { a: rec.a, c: rec.c, n: rec.n, ms: rec.ms, mN: rec.mN, mR: rec.mR, sa: rec.sa || 0, sms: rec.sms || 0, att: !!rec.att, attAt: rec.attAt, mj: rec.mj ? clone(rec.mj) : null }; }
 
   function startStudy(mode, extra) {
@@ -2123,7 +2143,7 @@
     var st = streakAt(key).count;
     var html = '<div class="result"><h2>' + s.answered + '장 꺼냈어요</h2>' +
       '<p class="lead">알았음 ' + s.good + '장, 몰랐음 ' + s.again + '장' + (s.newSeen ? '. 새 단어 ' + s.newSeen + '장을 처음 만났어요.' : '.') + '</p>' +
-      timeLine(s.ms, plan.rec.ms);
+      timeLine(s.ms, cardOnlyMs(plan.rec), '오늘 카드는 모두');
     if (plan.rec.att) {
       html += '<div class="result-stamp">' + sealSVG('출석', '', dayRot(key)) + '<p><strong>오늘 출석했어요</strong>' + (st > 1 ? st + '일 연속이에요.' : '내일도 도장을 이어 가요.') + '</p></div>';
     } else if (plan.restDay) {
@@ -2143,10 +2163,16 @@
   }
 
   // 결과 화면의 공부 시간 줄: 이번에 걸린 시간과 오늘 전체
-  function timeLine(sessionMs, todayMs) {
+  // 쓰기 결과 화면의 시간 줄: 이번 쓰기, 오늘 쓰기 전체, 오늘 카드 시간을 따로 보여 준다 (1.0.16)
+  function bonusTimeLine(sessionMs, typeTodayMs) {
+    var same = Math.round(sessionMs / MIN) === Math.round(typeTodayMs / MIN);
+    return '<p class="time-line">이번 쓰기에 <strong>' + fmtMin(sessionMs) + '</strong> 걸렸어요.' +
+      (same ? '' : ' 오늘 쓰기는 모두 ' + fmtMin(typeTodayMs) + '이에요.') + ' 쓰기 시간은 카드 시간과 따로 세요.</p>';
+  }
+  function timeLine(sessionMs, todayMs, label) {
     var same = Math.round(sessionMs / MIN) === Math.round(todayMs / MIN);
     return '<p class="time-line">이번에 <strong>' + fmtMin(sessionMs) + '</strong> 걸렸어요.' +
-      (same ? '' : ' 오늘 모두 ' + fmtMin(todayMs) + '이에요.') + '</p>';
+      (same ? '' : ' ' + (label || '오늘 모두') + ' ' + fmtMin(todayMs) + '이에요.') + '</p>';
   }
   function weekMissedIds(track) {
     var t = track === 'major' ? 'major' : 'toeic';
@@ -2175,7 +2201,7 @@
     var mp = majorPlan(), remain = mp.due + mp.newLeft, bb = bonusButton('major');
     var html = '<div class="result"><h2>전공 ' + s.answered + '장 꺼냈어요</h2>' +
       '<p class="lead">알았음 ' + s.good + '장, 몰랐음 ' + s.again + '장' + (s.newSeen ? '. 새 단어 ' + s.newSeen + '장을 처음 만났어요.' : '.') + '</p>' +
-      timeLine(s.ms, mp.rec.ms) + majorStampBlock() +
+      timeLine(s.ms, cardOnlyMs(mp.rec), '오늘 전공 카드는 모두') + majorStampBlock() +
       '<p class="next">' + (remain ? '오늘 남은 전공 카드 ' + remain + '장.' : '오늘 전공 카드는 다 꺼냈어요.') + '</p>' +
       '<div class="spacer"></div><div class="btns">' +
       (remain > 0 || majorPending() ? '<button class="btn ' + (mp.rec.att ? 'quiet' : 'primary') + ' wide" data-act="major-study">이어서 하기</button>' : '') +
@@ -2213,7 +2239,7 @@
     state.lastPractice = { deck: s.deckId, ids: s.initialIds, track: s.track };
     var html = '<div class="result"><h2>연습 ' + s.answered + '문제 했어요</h2>' +
       '<p class="lead">알았음 ' + s.good + ', 몰랐음 ' + s.again + '. 복습 일정은 바뀌지 않았어요.</p>' +
-      timeLine(s.ms, s.free ? (plan.rec.sms || 0) : plan.rec.ms);
+      timeLine(s.ms, s.free ? (plan.rec.sms || 0) : s.track === 'major' ? cardOnlyMs(mjRec(key)) : cardOnlyMs(plan.rec), s.free ? '' : s.track === 'major' ? '오늘 전공 카드는 모두' : '오늘 카드는 모두');
     if (missed.length) {
       html += '<ul class="miss-list">' + missed.slice(0, 12).map(function (id) { var c = DB.cards[id]; return '<li><b>' + esc(c.w) + '</b><span>' + esc(c.m) + '</span></li>'; }).join('') + '</ul>' +
         (missed.length > 12 ? '<p class="hint">그 밖에 ' + (missed.length - 12) + '개 더 있어요.</p>' : '');
@@ -2338,16 +2364,17 @@
 
     // 최근 7일 공부
     html += '<section class="section"><h2>최근 7일 ' + (mj ? '전공 ' : '') + '공부</h2><table class="plain-table"><thead><tr><th>날짜</th><th class="num">문제</th><th class="num">복습 기억</th><th class="num">시간</th></tr></thead><tbody>';
-    var sumA = 0, sumMs = 0;
+    var sumA = 0, sumMs = 0, sumT = 0;
     for (var q = 0; q < 7; q++) {
       var dk = F.addDaysKey(key, -q), r2 = (mj ? (DB.days[dk] && DB.days[dk].mj) : DB.days[dk]) || { a: 0, c: 0, ms: 0 };
       var rb = rs.byDay[dk];
       var dayName = q === 0 ? '오늘' : keyLabel(dk) + '(' + DOW[F.keyToDow(dk)] + ')';
-      sumA += r2.a || 0; sumMs += r2.ms || 0;
-      html += '<tr><td>' + dayName + (isRestDay(dk) && !r2.a ? ' <span class="muted small">쉼</span>' : '') + '</td><td class="num">' + r2.a + '</td><td class="num">' + (rb ? rb.good + '/' + rb.total : '-') + '</td><td class="num">' + (r2.ms ? fmtMin(r2.ms) : '-') + '</td></tr>';
+      var ca = cardOnlyA(r2), cm = cardOnlyMs(r2), tm = typeMs(r2);
+      sumA += ca; sumMs += cm; sumT += tm;
+      html += '<tr><td>' + dayName + (isRestDay(dk) && !r2.a ? ' <span class="muted small">쉼</span>' : '') + '</td><td class="num">' + ca + '</td><td class="num">' + (rb ? rb.good + '/' + rb.total : '-') + '</td><td class="num">' + (cm ? fmtMin(cm) : '-') + (tm ? '<span class="type-time">쓰기 ' + fmtMin(tm) + '</span>' : '') + '</td></tr>';
     }
-    html += '</tbody><tfoot><tr><th scope="row">7일 합계</th><td class="num">' + sumA + '</td><td class="num"></td><td class="num">' + (sumMs ? fmtMin(sumMs) : '-') + '</td></tr></tfoot></table>' +
-      '<p class="hint">복습 기억은 기억한 수/복습한 수예요. 시간은 카드를 보고 답하기까지 걸린 시간만 세요(한 장에 90초까지).</p></section>';
+    html += '</tbody><tfoot><tr><th scope="row">7일 합계</th><td class="num">' + sumA + '</td><td class="num"></td><td class="num">' + (sumMs ? fmtMin(sumMs) : '-') + (sumT ? '<span class="type-time">쓰기 ' + fmtMin(sumT) + '</span>' : '') + '</td></tr></tfoot></table>' +
+      '<p class="hint">문제와 시간은 카드만 센 거예요. 쓰기 시간은 시간 아래에 따로 적었어요. 복습 기억은 기억한 수/복습한 수예요. 시간은 카드를 보고 답하기까지 걸린 시간만 세요(한 장에 90초까지, 앱을 내려 둔 동안은 빼고).</p></section>';
     return html;
   }
 
@@ -2952,6 +2979,7 @@
   }
 
   document.addEventListener('click', function (e) {
+    awayAt = 0; // 누르고 있으면 앱 안에 있는 것: 돌아온 신호를 놓쳤어도 '나감' 표시를 지운다
     var t = e.target.closest('[data-act]');
     if (!t) return;
     var act = t.dataset.act;
@@ -3024,10 +3052,11 @@
       else toast('보내기 화면을 열지 못했어요. 파일로 저장을 써 주세요.');
     } else if (evt === 'notif-permission') { closeAllModals(); render(); }
     else if (evt === 'resume') {
+      clockBack();
       if (todayKey() !== lastDayRendered && !S) { lastDayRendered = todayKey(); render(); }
       else if (!S && !state.overlay) render();
       syncReads(false); // 날이 바뀌었거나 아까 못 받았으면 지문을 받아 본다
-    } else if (evt === 'pause') { saveNow(); }
+    } else if (evt === 'pause') { clockAway(); saveNow(); }
   };
   window.__handleBack = function () {
     if (closeTopModal()) return true;
@@ -3037,13 +3066,15 @@
     return false;
   };
   document.addEventListener('visibilitychange', function () {
-    if (document.hidden) { saveNow(); return; }
+    if (document.hidden) { clockAway(); saveNow(); return; }
+    clockBack();
     if (loadProblem) return;
     var mv = checkTimeZone(); // 앱을 켜 둔 채로 시차가 있는 곳에 다녀온 경우
     if (mv.length) { saveNow(); render(); toast(moveToast(mv)); }
     syncReads(false);
   });
   window.addEventListener('pagehide', saveNow);
+  document.addEventListener('keydown', function () { awayAt = 0; }, true);
   // 영어 글꼴을 다 받거나 화면 폭이 바뀌면 큰 영어 단어의 크기를 다시 맞춘다
   if (document.fonts && document.fonts.addEventListener) document.fonts.addEventListener('loadingdone', function () { fitWords(); });
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { fitWords(); });
