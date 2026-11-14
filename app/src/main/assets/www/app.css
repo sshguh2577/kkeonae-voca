@@ -76,6 +76,7 @@ body {
   overflow-wrap: anywhere;
 }
 button, input, select, textarea { font: inherit; color: inherit; }
+p, li, dd { text-wrap: pretty; } /* 1.0.18: 마지막 줄에 한 낱말만 남지 않게 */
 button { cursor: pointer; }
 :focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; border-radius: 6px; }
 [hidden] { display: none !important; }
@@ -171,6 +172,8 @@ button { cursor: pointer; }
   .week .seal, .week .seal-empty, .week .seal-rest { width: 36px; height: 36px; }
   .track-btn { gap: 5px; padding: 0 8px 0 6px; font-size: 16px; } /* '토익', '전공' 글자가 한 글자씩 꺾이던 것 */
   .track-btn .n { padding: 1px 6px; }
+  .pair-face .ball { width: 22px; height: auto; } /* 1.0.18: 전공 단추의 얼굴 둘이 좁은 화면에서 2px 넘치던 것 */
+  .pair-face .ball + .ball { margin-left: -8px; }
 }
 
 /* 오늘 카드 묶음 */
@@ -494,10 +497,18 @@ section.today { margin: 6px 0 0; } /* 홈의 '오늘 꺼낼 카드' 칸에만 (�
 .track-btn[aria-pressed="true"] .n { background: var(--card); color: var(--ink); box-shadow: none; }
 .track-btn[aria-pressed="true"] .n.done { color: var(--stamp); }
 .major-home { margin: 0; }
-.index-card.has-mascot .today-total, .index-card.has-mascot .today-desc { padding-right: 96px; }
-.index-card.has-mascot .today-desc { line-height: 1.75; margin-bottom: 16px; }
-.mascot { position: absolute; right: 10px; top: 56px; width: 92px; padding: 0; border: 0; background: none; line-height: 0; }
-.mascot .ball { display: block; width: 92px; height: auto; }
+/* 오늘 카드 머리: 큰 글씨와 공 캐릭터를 한 줄에 두고, 설명은 그 아래에 카드 너비를 다 쓴다 (1.0.18) */
+.card-head { display: flex; align-items: center; gap: 10px; min-height: 92px; margin: -6px 0 4px; }
+.card-head > .today-total { flex: 1 1 auto; min-width: 0; text-wrap: balance; }
+.card-head > .today-total.word { font-size: 21px; line-height: 1.3; } /* 글 머리는 두 줄 안에: 글자 115%·폭 360에서 '오늘 전공 카드는'이 한 줄에 들어가는 크기 */
+.index-card.has-mascot .today-desc { line-height: 1.75; margin: 4px 0 16px; text-wrap: pretty; }
+.mascot { flex: none; padding: 0; border: 0; background: none; line-height: 0; margin-right: -6px; }
+.mascot .ball { display: block; height: auto; }
+.mascot.pair { display: flex; align-items: flex-start; }
+.mascot.pair .ball + .ball { margin-left: -28px; margin-top: 14px; }
+.mascot.pair.big .ball + .ball { margin-left: -32px; margin-top: 16px; }
+.sent { display: inline-block; } /* 문장 묶음: sents() */
+.btn.wrap2 { flex-wrap: wrap; column-gap: .3em; row-gap: 0; line-height: 1.35; padding-top: 6px; padding-bottom: 6px; } /* 단추 글이 길면 묶음 사이에서 줄을 바꾼다 */
 .ball { color: var(--ink); }
 .home-actions.one { grid-template-columns: 1fr; }
 .empty-ball { margin: 0 0 6px; line-height: 0; }
@@ -625,3 +636,18 @@ button.tap-w { text-decoration: underline; text-decoration-color: var(--blue); t
 .goal-d b { font-size: 21px; font-weight: 800; color: var(--ink); }
 .goal-d span { font-size: 15px; font-weight: 800; color: var(--blue); font-variant-numeric: tabular-nums; }
 .goal-s { margin: 6px 0 0; font-size: 13.5px; color: var(--ink-2); line-height: 1.5; }
+
+/* 1.0.18: 보충한 날 도장은 주황, 쉬는 날 공부한 도장은 보라 */
+:root { --makeup: #C25E14; --makeup-wash: #FCE8D7; --restudy: #6B4BD6; }
+@media (prefers-color-scheme: dark) { :root { --makeup: #F29A4A; --makeup-wash: rgba(242, 154, 74, .16); --restudy: #A98BF5; } }
+.seal.mk { --stamp: var(--makeup); }
+.seal.rd { --stamp: var(--restudy); }
+.seal-empty.fill, .cal-cell .mark.fill, .cal-legend .k.fill { border-color: var(--makeup); }
+.seal-empty.fill::after { border-color: var(--makeup); }
+.seal-empty.wait, .cal-cell .mark.wait { border: 1.5px dashed var(--makeup); }
+.seal-empty.today.makeup, .cal-cell.makeup .mark.wait { border: 2px solid var(--makeup); background: var(--makeup-wash); }
+.pair-face { display: inline-flex; flex: none; align-items: center; }
+.pair-face .ball + .ball { margin-left: -9px; }
+.pick-hint { color: var(--ink-3); font-size: 14px; margin: 8px 0 0; }
+.pick-block { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); }
+.pick-block p { margin: 0 0 10px; line-height: 1.6; font-size: 15px; }

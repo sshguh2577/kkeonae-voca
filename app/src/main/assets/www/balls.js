@@ -1,8 +1,10 @@
 // 꺼내보카 공 캐릭터. 컨트리볼 그림체(삐뚤빼뚤한 공, 눈동자 없는 흰 눈, 입·팔다리 없음)로 직접 그렸다.
-// 국기 무늬는 쓰지 않는다. 볼륨(사서, 파란 공): 토익·노래 / FICE(대학생, 초록 공): 금융·토목
+// 국기 무늬는 쓰지 않는다. 볼륨(사서, 파란 공): 토익 / 노래 친구(황혼색 공, 선글라스·기타): 노래
+// FICE(대학생): 금융보험은 초록 공에 학사모·동전, 토목은 연두 공에 안전모·계산기 (1.0.18)
 (function (root) {
   'use strict';
   var INK = '#1B2233';
+  var gradSeq = 0; // 그러데이션 id를 그림마다 따로 둔다 (같은 id가 여러 번 있으면 숨은 그림의 것을 가리킬 수 있다)
   function f(n) { return String(Math.round(n * 10) / 10); }
   function prng(seed) { var s = seed % 2147483647; if (s <= 0) s += 2147483646; return function () { s = s * 16807 % 2147483647; return (s - 1) / 2147483646; }; }
   // 손으로 그린 듯 살짝 찌그러진 공
@@ -18,14 +20,21 @@
   }
   var WHO = {
     vol: { d: blob(91, 90, 7, 0.011), fill: '#6C9AEA', shade: '#4C7BD0' },
-    fice: { d: blob(91, 90, 31, 0.011), fill: '#5CBF99', shade: '#3F9F7C' }
+    fice: { d: blob(91, 90, 31, 0.011), fill: '#5CBF99', shade: '#3F9F7C' },
+    civb: { d: blob(91, 90, 53, 0.011), fill: '#93C95E', shade: '#72AA41' },
+    mus: { d: blob(91, 90, 7, 0.011), shade: '#D2643C', dusk: true } // 황혼색: 위는 노랑, 아래로 갈수록 주홍
   };
   function P(d, fill, sw, extra) {
     return '<path d="' + d + '" fill="' + (fill || 'none') + '"' + (sw ? ' stroke="' + INK + '" stroke-width="' + sw + '" stroke-linejoin="round" stroke-linecap="round"' : '') + (extra ? ' ' + extra : '') + '/>';
   }
   function body(who) {
-    var w = WHO[who];
-    return P(w.d, w.shade) + '<g transform="translate(-4 -5) scale(.93)">' + P(w.d, w.fill) + '</g>' +
+    var w = WHO[who], fill = w.fill, defs = '';
+    if (w.dusk) {
+      var id = 'kk-dusk-' + (++gradSeq);
+      defs = '<defs><linearGradient id="' + id + '" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFD86E"/><stop offset=".52" stop-color="#FFA552"/><stop offset="1" stop-color="#F2795A"/></linearGradient></defs>';
+      fill = 'url(#' + id + ')';
+    }
+    return defs + P(w.d, w.shade) + '<g transform="translate(-4 -5) scale(.93)">' + P(w.d, fill) + '</g>' +
       '<path d="M-58 -52 C-48 -66 -34 -74 -20 -77" fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round" opacity=".35"/>' + P(w.d, null, 4.2);
   }
   // 눈: 흰 눈에 검은 테, 눈동자 없음. 기분은 눈 모양으로만 나타낸다
@@ -100,16 +109,18 @@
     return '<g transform="translate(54 54) rotate(10)"><rect x="-20" y="-27" width="40" height="54" rx="6" fill="#5D6885" stroke="' + INK + '" stroke-width="3.2"/>' +
       '<rect x="-14" y="-21" width="28" height="12" rx="2.5" fill="#C8F0C0" stroke="' + INK + '" stroke-width="2"/><path d="M-2 -15 H9" stroke="#2F6B3A" stroke-width="2.2" stroke-linecap="round"/>' + k + '</g>';
   }
-  function sweat() { return '<path d="M-84 -66 C-78 -56 -74 -50 -74 -44 C-74 -37 -79 -33 -84 -33 C-89 -33 -94 -37 -94 -44 C-94 -50 -90 -56 -84 -66 Z" fill="#A9D8F7" stroke="' + INK + '" stroke-width="2.6" stroke-linejoin="round"/>'; }
-  function blueprint() {
-    return '<g transform="translate(34 62) rotate(-24)"><rect x="-44" y="-12" width="88" height="24" rx="12" fill="#5B93EA" stroke="' + INK + '" stroke-width="3.2"/>' +
-      '<path d="M-30 -4 H18 M-30 4 H8" stroke="#E4EEFF" stroke-width="2" stroke-linecap="round" stroke-dasharray="6 5"/>' +
-      '<ellipse cx="44" cy="0" rx="7" ry="12" fill="#EAF2FF" stroke="' + INK + '" stroke-width="2.8"/><path d="M44 -5 a3 5 0 1 0 0.1 0" fill="none" stroke="#5B93EA" stroke-width="2"/></g>';
+  // 동전: 원(₩) 표시는 글꼴 대신 선으로 그린다
+  function coin() {
+    return '<g transform="translate(56 58) rotate(-10)"><circle cx="4" cy="5" r="24" fill="#D9A21B" stroke="' + INK + '" stroke-width="3.2"/>' +
+      '<circle cx="0" cy="0" r="24" fill="#F6C24A" stroke="' + INK + '" stroke-width="3.2"/><circle cx="0" cy="0" r="17" fill="none" stroke="#C98F12" stroke-width="2"/>' +
+      '<path d="M-10 -9 L-5 9 L0 -2 L5 9 L10 -9 M-12 -1 H12 M-12 4 H12" fill="none" stroke="' + INK + '" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>' +
+      '<path d="M-15 -11 Q-9 -18 -1 -19" fill="none" stroke="#FFF3C4" stroke-width="3" stroke-linecap="round"/></g>';
   }
+  function sweat() { return '<path d="M-84 -66 C-78 -56 -74 -50 -74 -44 C-74 -37 -79 -33 -84 -33 C-89 -33 -94 -37 -94 -44 C-94 -50 -90 -56 -84 -66 Z" fill="#A9D8F7" stroke="' + INK + '" stroke-width="2.6" stroke-linejoin="round"/>'; }
   function bandaid() {
     return '<g transform="translate(-52 30) rotate(-38)"><rect x="-15" y="-6.5" width="30" height="13" rx="6.5" fill="#F6CFA6" stroke="' + INK + '" stroke-width="2.4"/><rect x="-5.5" y="-6.5" width="11" height="13" fill="#FBE3C7" stroke="' + INK + '" stroke-width="1.6"/></g>';
   }
-  // kind: lib(사서) · rock(밴드) · fin(금융) · civ(토목) · vol(파란 공 얼굴) · fice(초록 공 얼굴) / mood: idle · happy · sleep
+  // kind: lib(사서) · rock(노래 친구) · fin(금융보험) · civ(토목) · vol(파란 공 얼굴) · fice(금융보험 얼굴) · civf(토목 얼굴) / mood: idle · happy · sleep
   function inner(kind, mood) {
     mood = mood || 'idle';
     var s = '<ellipse cx="0" cy="97" rx="68" ry="8" fill="#1D2B45" opacity=".13"/>';
@@ -117,17 +128,17 @@
       s += body('vol') + eyes(mood, 29, -22) + glasses(29, -22);
       if (kind === 'lib') s += book();
     } else if (kind === 'rock') {
-      s += body('vol') + shades() + guitar() + notes();
-    } else if (kind === 'civ') {
-      s += body('fice') + eyes(mood, 24, -10) + bandaid() + hardHat() + blueprint();
+      s += body('mus') + shades() + guitar() + notes();
+    } else if (kind === 'civ' || kind === 'civf') {
+      s += body('civb') + eyes(mood, 24, -10) + (kind === 'civ' ? bandaid() : '') + hardHat() + (kind === 'civ' ? calc() : '');
     } else {
       s += body('fice') + eyes(mood === 'idle' && kind === 'fin' ? 'worry' : mood, 24, -16) + gradCap();
-      if (kind === 'fin') s += (mood === 'idle' ? sweat() : '') + calc();
+      if (kind === 'fin') s += (mood === 'idle' ? sweat() : '') + coin();
     }
     if (mood === 'sleep' && kind !== 'rock') s += zzz();
     return s;
   }
-  var BOX = { vol: [34, 46, 192, 192], fice: [30, 4, 200, 236] };
+  var BOX = { vol: [34, 46, 192, 192], fice: [30, 4, 200, 236], civf: [30, 4, 200, 236] };
   function svg(kind, mood, px, label) {
     var b = BOX[kind] || [0, 0, 260, 250];
     px = px || 96;
