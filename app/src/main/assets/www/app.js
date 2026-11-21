@@ -1050,9 +1050,11 @@
   function openGuide() {
     var list = window.KKGuide || [];
     var html = '<div class="view changes guide" style="padding-bottom:28px"><div class="cal-head" style="grid-template-columns:44px 1fr 44px"><button class="icon-btn" data-act="close-overlay" aria-label="뒤로">' + ICON.back + '</button><h2>설명서</h2><span></span></div>' +
-      '<p class="hint" style="margin:0 0 4px">앱이 어떻게 움직이는지, 그리고 앞으로의 계획을 적어 둬요. 버전이 바뀌면 여기도 같이 고쳐요.</p>';
-    list.forEach(function (e) {
-      html += '<article class="chg"><h3>' + esc(e.t) + '</h3>' +
+      '<p class="hint" style="margin:0 0 4px">앱이 어떻게 움직이는지, 그리고 앞으로의 계획을 적어 둬요. 버전이 바뀌면 여기도 같이 고쳐요.</p>' +
+      // 1.0.19 차례: 설명서가 길어져서, 누르면 그 묶음으로 바로 간다
+      '<nav class="guide-toc" aria-label="설명서 차례"><h3>차례</h3><ol>' + list.map(function (e, i) { return '<li><button data-act="guide-go" data-i="' + i + '">' + esc(e.t) + '</button></li>'; }).join('') + '</ol></nav>';
+    list.forEach(function (e, i) {
+      html += '<article class="chg" id="guide-' + i + '" tabindex="-1"><h3>' + esc(e.t) + '</h3>' +
         (e.p || []).map(function (x) { return '<p class="g">' + esc(x) + '</p>'; }).join('') +
         (e.items && e.items.length ? changeItems(e) : '') +
         (e.note ? '<p class="seen">' + esc(e.note) + '</p>' : '') + '</article>';
@@ -1197,7 +1199,7 @@
       var maxOrder = 0; values(DB.decks).forEach(function (d) { if (d.order > maxOrder) maxOrder = d.order; });
       deck = DB.decks[deckId] = { id: deckId, title: title, day: isDay ? +dayNum : null, order: isDay ? +dayNum : maxOrder + 1, addedAt: Date.now(), track: track };
     } else { deck.title = title; if (!deck.track) deck.track = track; }
-    if (deck.track === 'song') { deck.free = true; if (info.song) deck.song = str(info.song); if (info.artist) deck.artist = str(info.artist); }
+    if (deck.track === 'song') { deck.free = true; if (info.song) deck.song = str(info.song); if (info.artist) deck.artist = str(info.artist); if (info.genre && deck.genre == null) deck.genre = str(info.genre); }
     if (deck.track === 'major') deck.major = info.major === 'civ' ? 'civ' : (deck.major || 'fin');
     var byWord = Object.create(null), baseOrd = 0; // 빈 표에서 시작한다: 'constructor' 같은 낱말이 '이미 있는 낱말'로 잘못 잡히지 않게
     cards().forEach(function (c) { if (c.deck === deckId) { byWord[c.w.toLowerCase()] = c; baseOrd = Math.max(baseOrd, (c.ord || 0) + 1); } });
@@ -1419,7 +1421,8 @@
     speak: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 9.5h3l4-3.5v12l-4-3.5h-3z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></svg>',
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>',
     next: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>',
-    moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 14.5A7.5 7.5 0 0 1 9.5 5a7.5 7.5 0 1 0 9.5 9.5z"/></svg>'
+    moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 14.5A7.5 7.5 0 0 1 9.5 5a7.5 7.5 0 1 0 9.5 9.5z"/></svg>',
+    chev: '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>'
   };
   function exampleHTML(ex) {
     var s = esc(ex);
@@ -1441,7 +1444,7 @@
   }
 
   /* ================= 화면 상태 ================= */
-  var state = { tab: 'home', calMonth: null, calTrack: 'toeic', search: '', deckId: null, overlay: null, pickTarget: null, mjPick: null };
+  var state = { tab: 'home', calMonth: null, calTrack: 'toeic', search: '', deckId: null, overlay: null, pickTarget: null, mjPick: null, doneOpen: {} };
   var view = document.getElementById('view');
   var overlay = document.getElementById('overlay');
   var modalRoot = document.getElementById('modal-root');
@@ -1525,13 +1528,13 @@
       else if (diff < 0 && (!st.start || k < st.start)) mark = '<span class="seal-none" title="' + pre + '시작 전"></span>'; // 갈래를 시작하기 전 날은 빠진 날이 아니다
       else if (diff === 0 && mk && !(d && d.rest)) mark = '<span class="seal-empty today makeup" title="보충하는 날"></span>';
       else if (isRestDay(k)) mark = '<span class="seal-rest' + (diff > 0 ? ' later' : '') + '" title="쉬는 날">' + ICON.moon + '</span>';
-      else if (d && d.rest) mark = '<span class="seal-rest" title="할 카드가 없던 날">' + ICON.moon + '</span>';
+      else if (d && d.rest) mark = '<span class="seal-empty nocard" title="할 카드가 없던 날"></span>'; // 1.0.19: 쉬는 날 달과 헷갈리지 않게 초록 동그라미
       else if (st.filled[k]) mark = '<span class="seal-empty fill" title="' + dayName(st.filled[k]) + '에 보충함"></span>';
       else if (st.frozen.indexOf(k) !== -1) mark = '<span class="seal-empty pass" title="휴식권 사용"></span>';
       else if (st.pending.indexOf(k) !== -1) mark = '<span class="seal-empty wait" title="보충 기다림"></span>';
       else if (diff === 0) mark = '<span class="seal-empty today"></span>';
       else if (diff > 0) mark = '<span class="seal-empty future"></span>';
-      else mark = '<span class="seal-empty"></span>';
+      else mark = sealSVG('결석', '', dayRot(k), 'ms'); // 1.0.19: 보충도 휴식권도 못 메운 날은 회색 '결석' 도장
       html += '<li class="' + (diff === 0 ? 'is-today' : '') + '"><span class="dow">' + label + '</span>' + mark + '</li>';
     }
     html += '</ol>';
@@ -1541,14 +1544,18 @@
       ? pre + '휴식권을 썼어요. ' + keyLabel(F.addDaysKey(win.end, 1), true) + '에 새로 생겨요.'
       : pre + '휴식권 1장이 있어요. ' + keyLabel(win.end) + '까지 하루 빠져도 ' + pre + '연속 기록이 이어져요.';
     var safe = st.ifSkip >= st.count; // 기다리는 보충을 안 해도 연속 기록이 그대로인가 (휴식권이 메움)
+    // 1.0.19: 그 빠진 날 칸의 휴식권을 이미 다른 날이 쓰고 있으면, 안 할 때 휴식권은 옮겨 갈 뿐이고 다른 날이 결석이 된다.
+    // 그때는 '휴식권이 메워요' 대신 '연속 일수는 그대로예요'라고 말한다
+    var passTaken = function (m) { return st.frozen.some(function (f) { return f !== m && passKey(f) === passKey(m); }); };
     if (mk) {
       var m = mk.makeup[mk.makeup.length - 1];
       note = studied(key, t) ? '오늘 보충해서 ' + dayName(m) + ' 몫을 채웠어요. ' + note
-        : '오늘은 ' + dayName(m) + '에 빠진 걸 보충할 수 있는 날이에요. ' + (safe ? '쉬어도 휴식권이 메워서 ' + pre + '연속 기록은 이어져요.' : '휴식권을 이미 써서, 오늘 출석해야 ' + pre + '연속 기록이 이어져요.');
+        : '오늘은 ' + dayName(m) + '에 빠진 걸 보충할 수 있는 날이에요. ' + (safe ? (passTaken(m) ? '쉬어도 ' + pre + '연속 일수는 그대로예요.' : '쉬어도 휴식권이 메워서 ' + pre + '연속 기록은 이어져요.') : '휴식권을 이미 써서, 오늘 출석해야 ' + pre + '연속 기록이 이어져요.');
     } else if (st.pending.length) {
       var p = st.pending[0];
-      note = dayName(p) + '에 빠진 건 ' + dayName(st.pendOn[p]) + '에 보충할 수 있어요. ' + (safe ? '안 해도 휴식권이 메워요.' : '휴식권을 이미 써서, 보충해야 ' + pre + '연속 기록이 이어져요.');
+      note = dayName(p) + '에 빠진 건 ' + dayName(st.pendOn[p]) + '에 보충할 수 있어요. ' + (safe ? (passTaken(p) ? '안 해도 ' + pre + '연속 일수는 그대로예요.' : '안 해도 휴식권이 메워요.') : '휴식권을 이미 써서, 보충해야 ' + pre + '연속 기록이 이어져요.');
     }
+    if (st.broke && st.broke >= sunday && st.broke < key) note += ' ' + dayName(st.broke) + '에 결석해서 ' + pre + '연속 기록이 다시 시작됐어요.'; // 1.0.19
     return { html: html, note: note, streak: st.count };
   }
   function dayName(k) { return DOW[F.keyToDow(k)] + '요일'; }
@@ -1645,6 +1652,51 @@
       return '<span class="sent">' + (parts.length > 1 ? parts.map(function (p, i) { return '<span class="sent">' + p + (i < parts.length - 1 ? ',' : '') + '</span>'; }).join(' ') : parts[0]) + '</span>';
     }).join(' ');
   }
+  // 1.0.19: 카드 뒷면 큰 뜻 글씨. '; '와 ', '로 나눈 덩어리를 한 묶음(.sent)으로 두어, 줄이 바뀌면 덩어리 사이(쉼표·세미콜론 뒤)에서 바뀐다.
+  // 괄호 말이 든 덩어리는 괄호 말 '(…)'과 그 앞뒤 말을 각각 묶는다. 그래서 길면 '(생각·변화를) / 받아들이다'처럼 괄호 말 뒤에서 바뀌고,
+  // 덩어리 전체를 다음 줄로 넘기느라 줄이 하나 더 생기지 않는다. 묶음 하나가 한 줄보다 길 때만 그 안에서 바뀐다
+  function meanHTML(m) {
+    var groups = String(m || '').split('; ');
+    return groups.map(function (g, gi) {
+      var parts = g.split(', ');
+      return parts.map(function (t, pi) {
+        var tail = pi < parts.length - 1 ? ',' : (gi < groups.length - 1 ? ';' : '');
+        var segs = esc(t).replace(/([가-힣])·([가-힣])/g, '$1\u2060·\u2060$2').split(/(\([^()]*\))/);
+        if (segs.length < 2) return '<span class="sent">' + segs[0] + tail + '</span>';
+        var us = segs.map(function (x) { return x.match(/^(\s*)([\s\S]*?)(\s*)$/); }), last = -1;
+        us.forEach(function (u, ui) { if (u[2]) last = ui; });
+        return us.map(function (u, ui) { return u[2] ? u[1] + '<span class="sent">' + u[2] + (ui === last ? tail : '') + '</span>' + u[3] : u[0]; }).join('');
+      }).join(' ');
+    }).join(' ');
+  }
+  /* 1.0.19 오늘 할 양: 오늘 끝낸 카드 / (끝낸 카드 + 남은 카드). 남은 카드는 첫 화면의 'N장'(복습+새 단어)과 같다.
+     끝낸 카드 = 오늘 답한 뒤 오늘 안에 다시 나오지 않는 카드(복습을 마쳤거나, 새 단어가 익히는 단계를 넘어간 것).
+     연습·쓰기는 복습 일정을 바꾸지 않아서 들어가지 않는다. 쉬는 날은 정해진 양이 없어서 보여 주지 않는다 */
+  function doneToday(t, key) {
+    var start = F.dayStartOfKey(key, dsh()), end = dayEndMs(key), n = 0;
+    for (var id in DB.cards) {
+      var c = DB.cards[id];
+      if (c.sus || c.st === 0 || !c.last || c.last < start || c.due < end) continue;
+      if (t === 'major' ? !inMajor(c) : !inDaily(c)) continue;
+      n++;
+    }
+    return n;
+  }
+  function amountOf(t, plan) {
+    if (plan.restDay) return null;
+    var done = doneToday(t, plan.key), left = plan.due + plan.newLeft, all = done + left;
+    if (!all) return null;
+    var pct = Math.floor(done / all * 100);
+    return { done: done, left: left, all: all, pct: pct, pctText: done && !pct ? '1% 미만' : pct + '%' };
+  }
+  function amountText(a, pre) {
+    // 두 문장으로 나눠 문장 단위로 줄이 바뀌게 한다 ('(6%)' 뒤에서 '을'이 떨어지지 않게)
+    return a.left ? '오늘 ' + (pre || '') + '할 양의 ' + a.pctText + '를 끝냈어요. ' + a.all + '장 중 ' + a.done + '장이에요.' : '오늘 ' + (pre || '') + '할 양 ' + a.all + '장을 다 끝냈어요.';
+  }
+  function amountMeter(a, pre) {
+    return '<div class="meter amount" role="progressbar" aria-label="오늘 ' + (pre || '') + '할 양" aria-valuemin="0" aria-valuemax="' + a.all + '" aria-valuenow="' + a.done + '"><span style="width:' + a.pct + '%"></span></div>' +
+      '<p class="meter-label"><span>' + sents(amountText(a, pre)) + '</span></p>'; // 글 묶음을 span 하나에 넣어야 줄 하나로 흐른다(meter-label은 flex)
+  }
   function meterLine(seal, text) { return '<p class="meter-label">' + seal + '<span>' + sents(text) + '</span></p>'; }
   function headHTML(cls, text) { return '<p class="' + cls + '">' + (/ word/.test(cls) ? esc(text) : '<span class="hlnum">' + esc(text) + '</span>') + '</p>'; }
   function homeToeic(plan) {
@@ -1671,14 +1723,15 @@
     else if (plan.reduced) desc += ' 복습이 많아서 오늘 새 단어를 ' + plan.rec.cap + '장으로 줄였어요.';
     var goal = DB.settings.minAnswers;
     var meter;
-    if (plan.rec.att) meter = bonusOn(plan.rec) ? meterLine(stampOf(key, 'toeic', -8, true), '오늘 쓰기까지 끝냈어요. 쓰기는 ' + fmtMin(typeMs(plan.rec)) + ' 걸렸어요.')
-      : meterLine(stampOf(key, 'toeic', -8), plan.restDay ? '쉬는 날인데 공부했어요. 더 해도 되고 그만해도 돼요.' : '오늘 출석했어요. 더 하면 내일이 가벼워져요.');
+    var amt = plan.rec.a > 0 ? amountOf('toeic', plan) : null; // 1.0.19 오늘 할 양
+    if (plan.rec.att) meter = (bonusOn(plan.rec) ? meterLine(stampOf(key, 'toeic', -8, true), '오늘 쓰기까지 끝냈어요. 쓰기는 ' + fmtMin(typeMs(plan.rec)) + ' 걸렸어요.')
+      : meterLine(stampOf(key, 'toeic', -8), plan.restDay ? '쉬는 날인데 공부했어요. 더 해도 되고 그만해도 돼요.' : '오늘 출석했어요. 더 하면 내일이 가벼워져요.')) + (amt ? amountMeter(amt) : '');
     else if (plan.restDay) meter = meterLine('', '안 해도 연속 기록이 이어져요. 한 문제만 풀어도 보라색 도장을 찍어요.');
     else if (plan.rec.rest) meter = '<p class="meter-label">할 카드가 없는 날이라 출석으로 쳐 줘요.</p>';
     else {
       var pct = Math.min(100, Math.round(plan.rec.a / goal * 100));
       meter = '<div class="meter" role="progressbar" aria-label="출석까지" aria-valuemin="0" aria-valuemax="' + goal + '" aria-valuenow="' + Math.min(goal, plan.rec.a) + '"><span style="width:' + pct + '%"></span></div>' +
-        '<p class="meter-label">출석까지 ' + goal + '문제 중 ' + Math.min(goal, plan.rec.a) + '문제</p>';
+        '<p class="meter-label">출석까지 ' + goal + '문제 중 ' + Math.min(goal, plan.rec.a) + '문제</p>' + (amt ? '<p class="meter-label amount-line"><span>' + sents(amountText(amt)) + '</span></p>' : '');
     }
     var canStudy = total > 0 || hasPendingLearning();
     var mins = DB.settings.shortMinutes;
@@ -1724,14 +1777,15 @@
     if (mp.hold) desc += ' 쉬는 기간 뒤라서, 밀린 전공 복습을 다 풀 때까지 새 단어를 멈췄어요.';
     else if (mp.reduced) desc += ' 전공 복습이 많아서 새 단어를 과목별 ' + m.cap + '장으로 줄였어요.';
     var goal = s.majorMin, meter;
-    if (m.att) meter = bonusOn(m) ? meterLine(stampOf(mp.key, 'major', -8, true), '오늘 전공 쓰기까지 끝냈어요. 쓰기는 ' + fmtMin(typeMs(m)) + ' 걸렸어요.')
-      : meterLine(stampOf(mp.key, 'major', -8), mp.restDay ? '쉬는 날인데 전공 공부를 했어요.' : '오늘 전공 출석했어요.');
+    var amtM = m.a > 0 ? amountOf('major', mp) : null; // 1.0.19 오늘 할 양
+    if (m.att) meter = (bonusOn(m) ? meterLine(stampOf(mp.key, 'major', -8, true), '오늘 전공 쓰기까지 끝냈어요. 쓰기는 ' + fmtMin(typeMs(m)) + ' 걸렸어요.')
+      : meterLine(stampOf(mp.key, 'major', -8), mp.restDay ? '쉬는 날인데 전공 공부를 했어요.' : '오늘 전공 출석했어요.')) + (amtM ? amountMeter(amtM, '전공 ') : '');
     else if (mp.restDay) meter = meterLine('', '안 해도 전공 연속 기록이 이어져요. 한 문제만 풀어도 보라색 도장을 찍어요.');
     else if (m.rest) meter = '<p class="meter-label">할 전공 카드가 없는 날이라 출석으로 쳐 줘요.</p>';
     else {
       var pct = Math.min(100, Math.round(m.a / goal * 100));
       meter = '<div class="meter" role="progressbar" aria-label="전공 출석까지" aria-valuemin="0" aria-valuemax="' + goal + '" aria-valuenow="' + Math.min(goal, m.a) + '"><span style="width:' + pct + '%"></span></div>' +
-        '<p class="meter-label">전공 출석까지 ' + goal + '문제 중 ' + Math.min(goal, m.a) + '문제</p>';
+        '<p class="meter-label">전공 출석까지 ' + goal + '문제 중 ' + Math.min(goal, m.a) + '문제</p>' + (amtM ? '<p class="meter-label amount-line"><span>' + sents(amountText(amtM, '전공 ')) + '</span></p>' : '');
     }
     var canStudy = total > 0 || majorPending();
     var mood = m.att ? 'happy' : (mp.restDay && m.a === 0) || m.rest ? 'sleep' : 'idle';
@@ -2113,7 +2167,7 @@
     var body = '', actions = '';
     var promptKo = S.bonus && c.cue ? c.cue : c.m; // 쓰기에서는 긴 뜻으로 묻는다 (없으면 짧은 뜻)
     var answerBlock = '<div class="answer">' +
-      (cur.mode !== 'type' || promptKo !== c.m ? '<p class="meaning">' + esc(c.m) + '</p>' : '') +
+      (cur.mode !== 'type' || promptKo !== c.m ? '<p class="meaning">' + meanHTML(c.m) + '</p>' : '') +
       (c.ex ? '<button class="speak-ex" data-act="speak" data-text="' + esc(c.ex) + '" aria-label="예문 듣기"><p class="example">' + exampleHTML(c.ex) + '</p></button>' : '') +
       (c.exKo ? '<p class="example-ko">' + esc(c.exKo) + '</p>' : '') +
       nuance +
@@ -2133,7 +2187,7 @@
       body = kicker + '<p class="cloze">' + esc(p.before) +
         (cur.revealed ? '<span class="filled">' + esc(p.target) + '</span>' : '<span class="blank" aria-label="빈칸"></span>') + esc(p.after) + '</p>' +
         (c.exKo ? '<p class="example-ko">' + esc(c.exKo) + '</p>' : '') +
-        (cur.revealed ? '<div class="answer"><div class="headword-row"><h2 class="headword long">' + esc(c.w) + '</h2>' + speakBtn + '</div><p class="meaning" style="margin-top:8px">' + esc(c.m) + '</p>' + nuance + (c.note ? '<p class="memo">' + esc(c.note) + '</p>' : '') + '</div>'
+        (cur.revealed ? '<div class="answer"><div class="headword-row"><h2 class="headword long">' + esc(c.w) + '</h2>' + speakBtn + '</div><p class="meaning" style="margin-top:8px">' + meanHTML(c.m) + '</p>' + nuance + (c.note ? '<p class="memo">' + esc(c.note) + '</p>' : '') + '</div>'
           : '<p class="recall-hint">빈칸에 들어갈 영어 단어를 떠올려 보세요</p>');
     } else if (cur.mode === 'mean') { // 쓰기: 영어를 보고 뜻을 쓴다
       body = kicker + '<div class="headword-row"><h2 class="headword ' + headwordClass(c.w) + '">' + esc(c.w) + '</h2>' + speakBtn + '</div>' +
@@ -2390,7 +2444,8 @@
       html += '<div class="result-stamp"><span class="seal-empty today" style="width:64px;height:64px;flex:none"></span><p><strong>출석까지 ' + left + '문제 남았어요</strong>조금만 더 하면 오늘 도장을 받아요.</p></div>';
     }
     var remainToday = plan.due + plan.newLeft;
-    html += '<p class="next">' + sents((remainToday ? '오늘 남은 카드 ' + remainToday + '장. ' : '오늘 카드는 다 꺼냈어요. ') + (tomorrowRest(key, 'toeic') || '내일 복습 예정 ' + Math.max(0, dueTomorrow) + '장.')) + '</p>';
+    var amtR = amountOf('toeic', plan); // 1.0.19
+    html += '<p class="next">' + sents((amtR ? amountText(amtR) + ' ' : '') + (remainToday ? '오늘 남은 카드 ' + remainToday + '장. ' : '오늘 카드는 다 꺼냈어요. ') + (tomorrowRest(key, 'toeic') || '내일 복습 예정 ' + Math.max(0, dueTomorrow) + '장.')) + '</p>';
     html += '<div class="spacer"></div><div class="btns">';
     if (!plan.rec.att && !plan.restDay && (remainToday > 0 || hasPendingLearning())) html += '<button class="btn primary wide" data-act="study">이어서 하기</button>';
     else if (remainToday > 0) html += '<button class="btn quiet wide" data-act="study">남은 카드도 하기</button>';
@@ -2439,7 +2494,7 @@
     var html = '<div class="result"><h2>전공 ' + s.answered + '장 꺼냈어요</h2>' +
       '<p class="lead">' + sents('알았음 ' + s.good + '장, 몰랐음 ' + s.again + '장' + (s.newSeen ? '. 새 단어 ' + s.newSeen + '장을 처음 만났어요.' : '.')) + '</p>' +
       timeLine(s.ms, cardOnlyMs(mp.rec), '오늘 전공 카드는 모두') + majorStampBlock() +
-      '<p class="next">' + (remain ? '오늘 남은 전공 카드 ' + remain + '장.' : '오늘 전공 카드는 다 꺼냈어요.') + '</p>' +
+      '<p class="next">' + sents((amountOf('major', mp) ? amountText(amountOf('major', mp), '전공 ') + ' ' : '') + (remain ? '오늘 남은 전공 카드 ' + remain + '장.' : '오늘 전공 카드는 다 꺼냈어요.')) + '</p>' +
       '<div class="spacer"></div><div class="btns">' +
       (remain > 0 || majorPending() ? '<button class="btn ' + (mp.rec.att ? 'quiet' : 'primary') + ' wide" data-act="major-study">이어서 하기</button>' : '') +
       bb + '<button class="btn ' + (!bb && (mp.rec.att || !remain) ? 'primary' : 'quiet') + ' wide" data-act="close-overlay">홈으로</button></div></div>';
@@ -2579,14 +2634,15 @@
       else if (k < key && (!st.start || k < st.start)) { cls += ' before'; label += mj ? ' 전공 시작 전' : ' 시작 전'; } // 1.0.17: 갈래를 시작하기 전 날은 빠진 날이 아니다
       else if (k === key && st.makeup && !(rec && rec.rest)) { cls += ' makeup'; inner = '<span class="mark wait"></span>' + inner; label += ' 보충하는 날'; }
       else if (isRestDay(k)) { cls += ' rest' + (k > key ? ' later' : ''); inner = '<span class="moon">' + ICON.moon + '</span>' + inner; label += ' 쉬는 날'; }
-      else if (rec && rec.rest) { inner = '<span class="mark"></span>' + inner; monthCount++; label += ' 할 카드가 없던 날'; }
+      else if (rec && rec.rest) { inner = '<span class="mark nocard"></span>' + inner; monthCount++; label += ' 할 카드가 없던 날'; }
       else if (st.filled[k]) { inner = '<span class="mark fill"></span>' + inner; label += ' ' + dayName(st.filled[k]) + '에 보충함'; }
       else if (st.frozen.indexOf(k) !== -1) { inner = '<span class="mark freeze"></span>' + inner; label += ' 휴식권 사용'; }
       else if (st.pending.indexOf(k) !== -1) { inner = '<span class="mark wait"></span>' + inner; label += ' 보충 기다림'; }
+      else if (k < key) { cls += ' miss'; inner = sealSVG(String(d), '', dayRot(k), 'ms') + inner; label += ' 결석'; } // 1.0.19
       if (k === key) cls += ' today';
       html += '<div class="' + cls + '" aria-label="' + esc(label) + '">' + inner + '</div>';
     }
-    html += '</div><div class="cal-legend"><span>' + sealSVG('출석', '', -6) + '출석</span><span>' + sealSVG('보충', '', -6, 'mk') + '보충 공부한 날</span><span>' + sealSVG('출석', '', -6, 'rd') + '쉬는 날 공부</span><span>' + sealSVG('출석', '', -6, '', true) + '쓰기까지</span><span><i class="k moon">' + ICON.moon + '</i>쉬는 날</span><span><i class="k"></i>할 카드가 없던 날</span><span><i class="k freeze"></i>휴식권 사용</span><span><i class="k fill"></i>보충으로 채운 날</span></div>';
+    html += '</div><div class="cal-legend"><span>' + sealSVG('출석', '', -6) + '출석</span><span>' + sealSVG('보충', '', -6, 'mk') + '보충 공부한 날</span><span>' + sealSVG('출석', '', -6, 'rd') + '쉬는 날 공부</span><span>' + sealSVG('출석', '', -6, '', true) + '쓰기까지</span><span><i class="k moon">' + ICON.moon + '</i>쉬는 날</span><span><i class="k nocard"></i>할 카드가 없던 날</span><span><i class="k freeze"></i>휴식권 사용</span><span><i class="k fill"></i>보충으로 채운 날</span><span>' + sealSVG('결석', '', -6, 'ms') + '결석</span></div>';
     html += '<dl class="facts four"><div><dt>이번 달 출석</dt><dd>' + monthCount + '일</dd></div><div><dt>그중 쓰기까지</dt><dd>' + fullCount + '일</dd></div><div><dt>지금 연속</dt><dd>' + st.count + '일</dd></div><div><dt>최장 연속</dt><dd>' + Math.max((mj ? DB.meta.bestStreakMajor : DB.meta.bestStreak) || 0, st.count) + '일</dd></div></dl>';
 
     // 앞으로 7일 복습
@@ -2668,8 +2724,24 @@
     return '<li class="word-item"><button data-act="word" data-id="' + esc(c.id) + '"><span class="w">' + esc(c.w) + '</span><span class="s">' + statusText(c) + '</span><span class="m">' + esc(c.m) + '</span></button></li>';
   }
   // 노래 탭의 노래 단어장 목록
+  /* 1.0.19 노래를 장르별로: 단어장의 genre(파일에 적힘, 또는 단어장 화면에서 고름). 없으면 지금까지 받은 노래는 아래 표로 정한다.
+     파일의 genre는 장르가 아직 없는 단어장에만 넣는다: 화면에서 직접 바꾼 장르를 다시 가져오기가 덮지 않게 */
+  var SONG_GENRE = { 'song-waybackhome': '케이팝', 'song-dynamite': '케이팝', 'song-butter': '케이팝', 'song-shisouhan': '제이팝·보컬로이드', 'song-transl-1': '제이팝·보컬로이드',
+    'song-forgottenwords': '제이팝·보컬로이드', 'song-thenights': '팝·EDM', 'song-waitingforlove': '팝·EDM' };
+  var GENRES = ['케이팝', '제이팝·보컬로이드', '팝·EDM', '록·밴드', '힙합·R&B', 'OST·애니'];
+  function songGenre(d) { return !d ? '' : d.genre != null ? String(d.genre) : (SONG_GENRE[d.id] || ''); } // ''로 고르면 '정하지 않음'이 그대로 남는다
+  function songGroups(songs) {
+    var by = {}, order = [];
+    songs.forEach(function (d) { var g = songGenre(d); if (!by[g]) { by[g] = []; order.push(g); } by[g].push(d); });
+    order.sort(function (a, b) { // 고르는 목록 차례, 그 밖의 장르는 가나다, 장르 없음은 맨 끝
+      var ia = a ? GENRES.indexOf(a) : 999, ib = b ? GENRES.indexOf(b) : 999;
+      if (ia < 0) ia = 500; if (ib < 0) ib = 500;
+      return ia !== ib ? ia - ib : a.localeCompare(b, 'ko');
+    });
+    return order.map(function (g) { return { genre: g, songs: by[g] }; });
+  }
   function songList(songs) {
-    return '<ul class="deck-list" id="song-section">' + songs.map(function (d) {
+    return '<ul class="deck-list song-section">' + songs.map(function (d) {
       var st = deckStats(d.id), p = songPlan(d.id);
       return '<li class="deck-item"><button data-act="deck" data-id="' + esc(d.id) + '"><span class="deck-top"><span class="deck-tab">' + esc(d.title) + '</span><span class="deck-count">' +
         (p.todo ? '<span class="badge new">할 단어 ' + p.todo + '</span> ' : '') + st.total + '개</span></span>' + segbar(st) + '<span class="deck-nums">' + deckNums(st) + '</span></button></li>';
@@ -2683,7 +2755,8 @@
       html += '<section class="empty" style="padding-top:4px"><h2>아직 노래 단어장이 없어요</h2><p>좋아하는 노래의 영어 가사를 Claude에게 보내면 노래 단어 파일을 만들어 줘요. 여기서 가져오면 오늘 할 일·출석·알림과 따로, 하고 싶을 때만 공부해요.</p></section>';
     } else {
       html += '<p class="hint" style="margin:-8px 0 14px">오늘 할 일·출석·알림과 따로, 하고 싶을 때만 공부해요. 복습할 때가 된 단어는 \'할 단어\'로 알려 줘요.</p>' +
-        '<div class="legend"><span><i class="seg-long"></i>머리에 남음</span><span><i class="seg-learn"></i>익히는 중</span><span><i class="seg-new"></i>새 단어</span></div>' + songList(songs);
+        '<div class="legend"><span><i class="seg-long"></i>머리에 남음</span><span><i class="seg-learn"></i>익히는 중</span><span><i class="seg-new"></i>새 단어</span></div>' +
+        '<div id="song-section">' + songGroups(songs).map(function (g) { return '<h2 class="song-group">' + esc(g.genre || '장르를 안 정한 노래') + '<span>' + g.songs.length + '곡</span></h2>' + songList(g.songs); }).join('') + '</div>';
     }
     return html + '<div class="btn-list" style="margin-top:20px"><button class="btn ' + (songs.length ? 'quiet' : 'primary') + ' wide" data-act="import-file" data-target="song">노래 단어 파일 가져오기</button>' +
       '<button class="btn text" data-act="paste-import" data-target="song">붙여 넣어 가져오기</button><button class="btn text" data-act="deck-new" data-target="song">새 노래 단어장 만들기</button></div>';
@@ -2700,6 +2773,9 @@
     var n = DB.settings.songNew || 10;
     return '<div class="view" style="padding-bottom:28px"><div class="cal-head" style="grid-template-columns:44px 1fr 44px"><button class="icon-btn" data-act="close-overlay" aria-label="뒤로">' + ICON.back + '</button><h2>' + esc(d.title) + '</h2><span></span></div>' +
       (info ? '<p class="song-info">' + esc(info) + '</p>' : '') +
+      '<label class="song-genre">장르<select data-input="song-genre" data-id="' + esc(d.id) + '" aria-label="노래 장르">' +
+        [''].concat(GENRES).concat(songGenre(d) && GENRES.indexOf(songGenre(d)) < 0 ? [songGenre(d)] : []).map(function (g) {
+          return '<option value="' + esc(g) + '"' + (g === songGenre(d) ? ' selected' : '') + '>' + (g ? esc(g) : '정하지 않음') + '</option>'; }).join('') + '</select></label>' +
       segbar(st) + '<p class="deck-nums" style="margin:8px 0 0">' + deckNums(st) + '</p>' +
       '<p class="deck-flag">노래 단어장이에요. 오늘 할 일·출석·알림에 들어가지 않고, 하고 싶을 때만 공부해요. 복습 날짜는 기억해 뒀다가 여기서 알려 줘요.</p>' +
       '<div class="deck-actions">' + (plan ? '<p class="song-plan">' + esc(plan) + '</p>' : '') +
@@ -2723,6 +2799,23 @@
     return '<li class="deck-item"><button data-act="deck" data-id="' + esc(d.id) + '"><span class="deck-top"><span class="deck-tab">' + esc(d.title) + '</span><span class="deck-count">' + flag + st.total + '개</span></span>' +
       segbar(st) + '<span class="deck-nums">' + deckNums(st) + '</span></button></li>';
   }
+  /* 1.0.19 Day가 늘어도 목록이 길어지지 않게: 새 단어가 남은 단어장만 펼쳐 두고, 새 단어를 다 만난 단어장은 한 줄로 접는다(누르면 펼침) */
+  function deckGroups(list, key) {
+    var open = [], done = [], sum = { total: 0, new: 0, learn: 0, long: 0, sus: 0 };
+    list.forEach(function (d) {
+      var st = deckStats(d.id);
+      if (st.total > 0 && st.new === 0) { done.push(d); ['total', 'new', 'learn', 'long', 'sus'].forEach(function (k) { sum[k] += st[k]; }); } else open.push(d);
+    });
+    var html = '';
+    if (open.length) html += '<ul class="deck-list">' + open.map(deckItem).join('') + '</ul>';
+    if (done.length) {
+      var shown = !!state.doneOpen[key], kind = key === 'major' ? '전공 단어장' : done.every(function (d) { return d.day != null; }) ? 'Day' : '단어장';
+      html += '<ul class="deck-list done-decks"><li class="deck-item"><button data-act="toggle-done" data-key="' + key + '" aria-expanded="' + shown + '"><span class="deck-top"><span class="deck-tab">새 단어를 다 만난 ' + kind + ' ' + done.length + '개</span><span class="deck-count">' + (shown ? '접기' : '펼치기') + ICON.chev + '</span></span>' +
+        segbar(sum) + '<span class="deck-nums">머리에 남음 ' + sum.long + ', 익히는 중 ' + sum.learn + (sum.sus ? ', 보류 ' + sum.sus : '') + '</span></button></li>' +
+        (shown ? done.map(deckItem).join('') : '') + '</ul>';
+    }
+    return html;
+  }
   function majorSection(majors) {
     var s = DB.settings;
     var html = '<section class="section" id="major-section"><h2>전공 단어</h2>';
@@ -2730,7 +2823,7 @@
       html += '<p class="hint" style="margin-top:0">Claude가 고른 전공 단어(금융·보험, 토목)를 넣으면 하루에 과목별 ' + s.majorPerDay + '개씩 나와요. 출석은 토익과 따로 찍어요.</p>';
     } else {
       var fF = majorFresh('fin').length, fC = majorFresh('civ').length;
-      html += '<p class="hint" style="margin-top:0">하루에 금융·보험 ' + s.majorPerDay + '개, 토목 ' + s.majorPerDay + '개씩 새로 나와요. 출석은 토익과 따로 찍어요.</p><ul class="deck-list">' + majors.map(deckItem).join('') + '</ul>' +
+      html += '<p class="hint" style="margin-top:0">하루에 금융·보험 ' + s.majorPerDay + '개, 토목 ' + s.majorPerDay + '개씩 새로 나와요. 출석은 토익과 따로 찍어요.</p>' + deckGroups(majors, 'major') +
         '<p class="hint">아직 안 나온 단어: 금융·보험 ' + fF + '개, 토목 ' + fC + '개.' + (Math.min(fF, fC) <= s.majorPerDay * 3 ? ' 곧 떨어지니 Claude에게 다음 전공 단어를 받아 주세요.' : '') + '</p>';
     }
     return html + '<div class="btn-list"><button class="btn quiet wide" data-act="import-file" data-target="major">전공 단어 파일 가져오기</button></div></section>';
@@ -2753,7 +2846,7 @@
         leeches.sort(function (a, b) { return fails(b) - fails(a); }).slice(0, 5).map(wordRow).join('') + '</ul></section>';
     }
     html += '<section class="section"><h2>토익 Day별 진도</h2>';
-    if (decks.length) html += '<div class="legend"><span><i class="seg-long"></i>머리에 남음</span><span><i class="seg-learn"></i>익히는 중</span><span><i class="seg-new"></i>새 단어</span></div><ul class="deck-list">' + decks.map(deckItem).join('') + '</ul>';
+    if (decks.length) html += '<div class="legend"><span><i class="seg-long"></i>머리에 남음</span><span><i class="seg-learn"></i>익히는 중</span><span><i class="seg-new"></i>새 단어</span></div>' + deckGroups(decks, 'toeic');
     else html += '<p class="hint" style="margin-top:0">아직 Day가 없어요. Claude가 만들어 준 Day 파일을 가져와 주세요. 처음이라면 체험용 10단어로 먼저 써 보세요.</p>';
     html += '<div class="btn-list"><button class="btn quiet wide" data-act="import-file" data-target="toeic">Day 파일 가져오기</button><button class="btn text" data-act="paste-import" data-target="toeic">붙여 넣어 가져오기</button>' +
       '<button class="btn text" data-act="deck-new" data-target="toeic">새 단어장 만들기</button>' + (decks.length ? '' : '<button class="btn text" data-act="load-sample">체험용 10단어 넣기</button>') + '</div></section>';
@@ -2775,7 +2868,7 @@
       (tr === 'major' && !d.paused ? '<p class="deck-flag">' + (majorSub(d.id) === 'civ' ? '토목' : '금융·보험') + ' 전공 단어장이에요. 홈의 전공 칸에서 하루에 ' + DB.settings.majorPerDay + '개씩 새로 나와요.</p>' : '') +
       '<div class="deck-actions"><button class="btn primary wide" data-act="practice" data-id="' + esc(d.id) + '">이 ' + kind + ' 연습하기</button>' +
       '<p class="hint">복습 일정은 그대로 두고 이 ' + kind + '만 훑어봐요. 푼 문제는 ' + (tr === 'major' ? '전공 출석' : '출석') + '에 들어가요.</p>' +
-      '<div class="pair"><button class="btn quiet" data-act="deck-first" data-id="' + esc(d.id) + '">' + (d.first ? '원래 순서로' : '새 단어 먼저 하기') + '</button>' +
+      '<div class="pair opts"><button class="btn quiet" data-act="deck-first" data-id="' + esc(d.id) + '">' + (d.first ? '원래 순서로' : '새 단어 먼저 하기') + '</button>' +
       '<button class="btn quiet" data-act="deck-pause" data-id="' + esc(d.id) + '">' + (d.paused ? '새 단어 다시 시작' : '새 단어 멈추기') + '</button></div>' +
       '<div class="pair"><button class="btn quiet" data-act="word-new" data-id="' + esc(d.id) + '">단어 추가</button><button class="btn quiet" data-act="paste-import" data-target="' + tr + '" data-title="' + esc(d.title) + '">붙여 넣어 추가</button></div>' +
       '<button class="btn text" data-act="deck-rename" data-id="' + esc(d.id) + '">이름 바꾸기</button></div>' +
@@ -3015,6 +3108,11 @@
         delete DB.decks[id]; saveNow(); closeAllModals(); closeOverlay(); toast('지웠어요.');
       }, true);
     },
+    'toggle-done': function (el) { // 1.0.19 다 만난 단어장 펼치기/접기
+      var k = el.dataset.key; state.doneOpen[k] = !state.doneOpen[k];
+      var box = document.getElementById('word-results'); if (box) box.innerHTML = wordResults();
+      var again = document.querySelector('[data-act="toggle-done"][data-key="' + k + '"]'); if (again) again.focus();
+    },
     'copy-leeches': function () {
       var list = cards().filter(function (c) { return trackOf(c) !== 'song' && isLeech(c); }).sort(function (a, b) { return fails(b) - fails(a); });
       var text = '꺼내보카에서 자주 틀리는 단어예요. 외우기 쉬운 연상법을 붙여서 패치 파일로 만들어 줘.\n' +
@@ -3178,6 +3276,10 @@
     'mascot': function () { if (!majorDoneForPick()) { toast('오늘 전공 공부를 끝내면 공을 눌러 과목별로 볼 수 있어요.'); return; } state.mjPick = state.mjPick === 'fin' ? 'civ' : state.mjPick === 'civ' ? null : 'fin'; render(); },
     'mj-sub': function (el) { var ids = majorSubIds(el.dataset.sub).slice(0, MJ_SUB_MAX); if (ids.length) startPractice(null, ids, 'major'); },
     'cal-track': function (el) { state.calTrack = el.dataset.v === 'major' ? 'major' : 'toeic'; render(); },
+    'guide-go': function (el) { // 1.0.19 설명서 차례
+      var a = document.getElementById('guide-' + el.dataset.i); if (!a) return;
+      a.scrollIntoView({ block: 'start' }); a.focus({ preventScroll: true });
+    },
     'goto-place': function (el) {
       var p = el.dataset.place;
       closeAllModals(); if (state.overlay) closeOverlay(true);
@@ -3300,6 +3402,9 @@
       else DB.settings[name] = t.checked;
       saveNow();
       if ((name === 'n1on' || name === 'n2on') && t.checked) { var ns = Native.notifStatus(); if (ns && !ns.granted) Native.requestNotif(); }
+    } else if (t.dataset.input === 'song-genre') { // 1.0.19
+      var sd = DB.decks[t.dataset.id];
+      if (sd) { sd.genre = t.value; saveNow(); toast(t.value ? '‘' + t.value + '’' + josa(t.value, '으로/로').slice(t.value.length) + ' 묶었어요.' : '장르를 비웠어요. 노래 탭 맨 아래에 따로 모여요.'); }
     } else if (t.dataset.input === 'time') {
       var p = String(t.value || '').split(':');
       if (p.length < 2) return;
@@ -3463,6 +3568,6 @@
     setBreak: setBreak, clearBreak: clearBreak, currentBreak: currentBreak, inBreak: inBreak, breakHold: breakHold, checkTimeZone: checkTimeZone, isMoveDay: isMoveDay, passedReview: passedReview, chooseMode: chooseMode, retentionLine: retentionLine, bonusCountFor: bonusCountFor, lowNewNotice: lowNewNotice, get session() { return S; },
     openTaps: openTaps, tapCount: tapCount, tapSentence: tapSentence, tapPracticeIds: tapPracticeIds, startPractice: startPractice, startStudy: startStudy, renderStudy: renderStudy,
     attendance: attendance, makeupOf: makeupOf, trackStart: trackStart, weeklyRest: weeklyRest, weekStrip: weekStrip, tomorrowRest: tomorrowRest, keepStampLine: keepStampLine, majorTomorrowLine: majorTomorrowLine, goalCard: goalCard,
-    stampLook: stampLook, restOpen: restOpen, checkAttendance: checkAttendance, checkMajorAttendance: checkMajorAttendance, sents: sents, bonusButton: bonusButton,
+    stampLook: stampLook, restOpen: restOpen, checkAttendance: checkAttendance, checkMajorAttendance: checkMajorAttendance, sents: sents, meanHTML: meanHTML, doneToday: doneToday, amountOf: amountOf, bonusButton: bonusButton,
     get ttsBad() { return ttsBad; } };
 })();

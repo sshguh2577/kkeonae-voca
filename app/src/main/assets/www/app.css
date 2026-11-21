@@ -11,21 +11,22 @@
   --rule-red: #E3867E;
   --ink: #1D2B45;
   --ink-2: #4F5C76;
-  --ink-3: #6E7A92;
+  --ink-3: #5B677F; /* 1.0.19: 밝은 화면 회색 글자 대비 3.5 → 4.7 (바탕 #E4E9F0 위) */
   --blue: #2457A6;
   --blue-press: #1B4585;
   --on-blue: #FFFFFF;
   --blue-wash: #D8E3F4;
-  --graphite: #66708A;
-  --graphite-press: #535C73;
+  --graphite: #5F6983; /* 1.0.19: 단추 속 작은 글자(10분 뒤)도 또렷하게 */
+  --graphite-press: #4D566C;
   --on-graphite: #FFFFFF;
   --stamp: #C73A2E;
+  --stamp-ink: #B53227; /* 1.0.19 글자로 쓰는 빨강 (도장 그림은 --stamp 그대로) */
   --line: #C9D2DF;
   --field: #F4F7FB;
   --seg-new: #C3D1E8;
   --seg-learn: #6E92CB;
   --seg-long: #1F4F99;
-  --good: #2E7D4F;
+  --good: #2A7349; /* 1.0.19: '켜짐' 같은 초록 글자 대비 4.1 → 4.7 */
   --shadow-card: 0 1px 0 rgba(29, 43, 69, .07), 0 10px 24px -16px rgba(29, 43, 69, .45);
   --font-ko: "Noto Sans KR", "Noto Sans CJK KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
   --font-en: "Schola", "Noto Serif", Georgia, serif;
@@ -50,6 +51,7 @@
     --graphite-press: #A3ABBD;
     --on-graphite: #0D1524;
     --stamp: #E35B4E;
+    --stamp-ink: #EB6E62; /* 1.0.19 글자로 쓰는 빨강: 카드 위에서도 또렷하게 (도장 그림은 --stamp 그대로) */
     --line: #2B3751;
     --field: #162033;
     --seg-new: #33456A;
@@ -131,7 +133,7 @@ button { cursor: pointer; }
 .btn.graphite:active { background: var(--graphite-press); }
 .btn.quiet { background: transparent; color: var(--blue); box-shadow: inset 0 0 0 1.5px var(--blue); }
 .btn.text { background: none; color: var(--blue); min-height: 44px; padding: 0 10px; font-weight: 700; font-size: 15px; }
-.btn.danger-text { background: none; color: var(--stamp); min-height: 44px; padding: 0 10px; font-size: 15px; font-weight: 700; }
+.btn.danger-text { background: none; color: var(--stamp-ink, var(--stamp)); min-height: 44px; padding: 0 10px; font-size: 15px; font-weight: 700; }
 .btn.wide { width: 100%; }
 .btn.small { min-height: 40px; font-size: 15px; padding: 0 14px; border-radius: 11px; }
 .btn[disabled] { opacity: .45; pointer-events: none; }
@@ -380,12 +382,20 @@ section.today { margin: 6px 0 0; } /* 홈의 '오늘 꺼낼 카드' 칸에만 (�
 .seg-learn { background: var(--seg-learn); }
 .seg-long { background: var(--seg-long); }
 .deck-nums { font-size: 13px; color: var(--ink-3); }
+/* 1.0.19 새 단어를 다 만난 단어장 묶음(누르면 펼침) */
+.done-decks > .deck-item:first-child .deck-tab { font-weight: 700; color: var(--ink-2); }
+.done-decks > .deck-item:first-child .deck-count { color: var(--blue); font-weight: 700; }
+.deck-count .chev { width: 16px; height: 16px; vertical-align: -3px; margin-left: 2px; transition: transform .15s; }
+[aria-expanded="true"] .chev { transform: rotate(180deg); }
+@media (prefers-reduced-motion: reduce) { .deck-count .chev { transition: none; } }
 .word-list { list-style: none; margin: 0; padding: 0; }
 .word-item button { width: 100%; border: 0; background: none; text-align: left; padding: 12px 0; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: baseline; }
 .word-item .w { font-family: var(--font-en); font-size: 19px; font-weight: 700; }
 .word-item .m { grid-column: 1 / 2; color: var(--ink-2); font-size: 14px; }
 .word-item .s { grid-row: 1 / 3; grid-column: 2; align-self: center; font-size: 12.5px; color: var(--ink-3); text-align: right; }
 .leech-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.leech-head h2 { font-size: 17px; font-weight: 700; margin: 0 0 10px; } /* 1.0.19: 기본 h2 크기(24px)로 커져 두 줄로 꺾이던 것 */
+.leech-head .btn { flex-shrink: 0; white-space: nowrap; }
 
 /* ---------- 설정 ---------- */
 .group { margin: 26px 0 0; }
@@ -420,7 +430,7 @@ section.today { margin: 6px 0 0; } /* 홈의 '오늘 꺼낼 카드' 칸에만 (�
 .switch input:focus-visible + span { outline: 3px solid var(--blue); outline-offset: 2px; }
 .time-input { height: 42px; border-radius: 10px; border: 1.5px solid var(--line); background: var(--field); padding: 0 10px; font-size: 16px; font-variant-numeric: tabular-nums; }
 .status-ok { color: var(--good); font-weight: 700; font-size: 14px; white-space: nowrap; }
-.status-no { color: var(--stamp); font-weight: 700; font-size: 14px; white-space: nowrap; }
+.status-no { color: var(--stamp-ink, var(--stamp)); font-weight: 700; font-size: 14px; white-space: nowrap; }
 .btn-list { display: grid; gap: 10px; margin: 12px 0 0; }
 
 /* ---------- 모달 ---------- */
@@ -435,7 +445,7 @@ section.today { margin: 6px 0 0; } /* 홈의 '오늘 꺼낼 카드' 칸에만 (�
 .sheet label.field { display: grid; gap: 6px; margin: 12px 0 0; font-size: 14px; color: var(--ink-2); }
 .sheet label.field input, .sheet label.field textarea { width: 100%; border-radius: 10px; border: 1.5px solid var(--line); background: var(--field); padding: 10px 12px; font-size: 16px; font-family: var(--font-ko); }
 .sheet label.field textarea { min-height: 84px; }
-.word-sheet .w { font-family: var(--font-en); font-size: calc(34px * var(--fit, 1)); font-weight: 700; margin: 0; overflow-wrap: break-word; }
+.word-sheet .w { color: var(--ink); font-family: var(--font-en); font-size: calc(34px * var(--fit, 1)); font-weight: 700; margin: 0; overflow-wrap: break-word; }
 .word-sheet dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 16px 0 0; font-size: 14px; }
 .word-sheet dt { color: var(--ink-3); }
 .word-sheet dd { margin: 0; }
@@ -459,6 +469,9 @@ section.today { margin: 6px 0 0; } /* 홈의 '오늘 꺼낼 카드' 칸에만 (�
 .deck-actions { display: grid; gap: 8px; margin: 16px 0 4px; }
 .deck-actions .hint { margin: 0 0 4px; }
 .deck-actions .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.deck-actions .pair .btn { padding: 0 12px; }
+/* 1.0.19 '새 단어 먼저 하기·새 단어 멈추기'는 단추 하나 폭이 글자 9.5개보다 좁으면 한 줄에 하나씩 */
+.deck-actions .pair.opts { font-size: 17px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5em), 1fr)); }
 .deck-flag { margin: 10px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--blue-wash); color: var(--ink-2); font-size: 14px; }
 .miss-list { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
 .miss-list li { display: flex; gap: 10px; align-items: baseline; font-size: 15px; }
@@ -492,10 +505,10 @@ section.today { margin: 6px 0 0; } /* 홈의 '오늘 꺼낼 카드' 칸에만 (�
 .track-btn .ball { flex: none; }
 .track-btn .t { flex: 1; text-align: left; white-space: nowrap; }
 .track-btn .n { font-size: 13px; padding: 1px 8px; border-radius: 99px; background: var(--blue-wash); color: var(--ink); white-space: nowrap; }
-.track-btn .n.done { background: transparent; box-shadow: inset 0 0 0 1.5px var(--stamp); color: var(--stamp); }
+.track-btn .n.done { background: transparent; box-shadow: inset 0 0 0 1.5px var(--stamp); color: var(--stamp-ink, var(--stamp)); }
 .track-btn[aria-pressed="true"] { background: var(--blue); color: var(--on-blue); box-shadow: none; }
 .track-btn[aria-pressed="true"] .n { background: var(--card); color: var(--ink); box-shadow: none; }
-.track-btn[aria-pressed="true"] .n.done { color: var(--stamp); }
+.track-btn[aria-pressed="true"] .n.done { color: var(--stamp-ink, var(--stamp)); }
 .major-home { margin: 0; }
 /* 오늘 카드 머리: 큰 글씨와 공 캐릭터를 한 줄에 두고, 설명은 그 아래에 카드 너비를 다 쓴다 (1.0.18) */
 .card-head { display: flex; align-items: center; gap: 10px; min-height: 92px; margin: -6px 0 4px; }
@@ -540,9 +553,17 @@ section.today { margin: 6px 0 0; } /* 홈의 '오늘 꺼낼 카드' 칸에만 (�
 
 /* 1.0.11: 설명서, 쓰기에서 한 글자 다른 자리 */
 .guide .chg h3 { font-size: 18px; }
+/* 1.0.19 설명서 차례 */
+.guide-toc { margin: 14px 0 4px; padding: 12px 14px 6px; border-radius: 12px; background: var(--card); box-shadow: inset 0 0 0 1px var(--card-edge); }
+.guide-toc h3 { margin: 0 0 4px; font-size: 15px; font-weight: 700; color: var(--ink-2); }
+.guide-toc ol { margin: 0; padding: 0 0 0 1.4em; }
+.guide-toc li { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.guide-toc button { width: 100%; min-height: 40px; border: 0; background: none; padding: 6px 0; text-align: left; font-size: 16px; font-weight: 600; color: var(--blue); }
+.guide .chg { scroll-margin-top: 8px; }
+.guide .chg:focus { outline: none; }
 .chg p.g { margin: 8px 0 0; color: var(--ink-2); font-size: 15px; line-height: 1.6; }
 .verdict .typed.near { text-decoration: none; color: var(--ink-2); }
-mark.diff { background: none; color: var(--stamp); font-weight: 700; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; padding: 0 1px; }
+mark.diff { background: none; color: var(--stamp-ink, var(--stamp)); font-weight: 700; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; padding: 0 1px; }
 
 /* 1.0.12: 색을 뜻이 있는 자리에만 더한다. 노랑(형광펜) = 오늘 할 것, 빨강(도장색) = 출석, 초록 = 머리에 남은 단어 */
 :root { --hl: #FFE072; --amber-wash: #FFE7B0; --amber-ink: #6B4700; }
@@ -588,7 +609,7 @@ li.read-row.none { color: var(--ink-3); font-size: 14px; background: transparent
 
 /* 1.0.12: 설정의 쉬는 기간 */
 .break-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 10px; }
-.break-form label { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--ink-2); }
+.break-form label { display: grid; grid-template-columns: 2.2em auto; align-items: center; gap: 6px; font-size: 14px; color: var(--ink-2); }
 .break-form input[type="date"] { font: inherit; font-size: 15px; min-height: 40px; padding: 0 8px; border-radius: 10px; border: 1.5px solid var(--line); background: var(--card); color: var(--ink); }
 
 /* 1.0.17: 듣고 떠올리기 카드 — 글자 없이 큰 듣기 단추만 보인다 */
@@ -623,7 +644,7 @@ button.tap-w { text-decoration: underline; text-decoration-color: var(--blue); t
 .seal-empty.wait { border: 1.5px dashed var(--amber-ink, #6B4700); }
 .seal-empty.today.makeup { border: 2px solid var(--amber-ink, #6B4700); background: var(--amber-wash); }
 @media (max-width: 339px) { .week .seal-none { width: 36px; height: 36px; } }
-.cal-cell.before .num { color: var(--ink-3); opacity: .45; }
+.cal-cell.before .num { color: var(--ink-3); opacity: .62; }
 .cal-cell .mark.fill { border: 1.5px dotted var(--good); }
 .cal-cell .mark.wait { border: 1.5px dashed var(--amber-ink, #6B4700); }
 .cal-cell.makeup .mark.wait { border-width: 2px; border-style: solid; background: var(--amber-wash); }
@@ -642,6 +663,31 @@ button.tap-w { text-decoration: underline; text-decoration-color: var(--blue); t
 @media (prefers-color-scheme: dark) { :root { --makeup: #F29A4A; --makeup-wash: rgba(242, 154, 74, .16); --restudy: #A98BF5; } }
 .seal.mk { --stamp: var(--makeup); }
 .seal.rd { --stamp: var(--restudy); }
+/* 1.0.19 결석: 보충도 휴식권도 못 메운 날. 빨강(출석)과 겹치지 않게 회색 도장에 '결석' 글자 */
+:root { --absent: #5F6B82; }
+@media (prefers-color-scheme: dark) { :root { --absent: #AEB7C9; } }
+.seal.ms { --stamp: var(--absent); }
+.cal-cell.miss .num { opacity: 0; }
+/* 1.0.19 오늘 할 양: 출석 막대 아래, 또는 출석한 뒤 도장 줄 아래 */
+.meter.amount { margin-top: 12px; background: var(--seg-new); }
+.meter.amount > span { background: var(--seg-learn); }
+.meter-label.amount-line { margin-top: 4px; color: var(--ink-3); }
+/* 1.0.19 표시 색 나누기: 회색이 너무 많아서 쉬는 날은 노란 달, 휴식권은 하늘색 점선, 할 카드가 없던 날은 초록 동그라미.
+   출석 빨강·보충 주황·쉬는 날 공부 보라·결석 회색 도장은 그대로 */
+:root { --rest-moon: #A87610; --pass: #1F7F95; --nocard: #2E7D4F; }
+@media (prefers-color-scheme: dark) { :root { --rest-moon: #E9C46A; --pass: #5CC6DC; --nocard: #6CC291; } }
+.seal-rest { color: var(--rest-moon); border-color: var(--rest-moon); }
+.cal-cell .moon, .cal-legend .k.moon { color: var(--rest-moon); }
+.seal-empty.pass, .cal-cell .mark.freeze, .cal-legend .k.freeze { border-color: var(--pass); }
+.seal-empty.nocard, .cal-cell .mark.nocard, .cal-legend .k.nocard { border: 1.5px solid var(--nocard); }
+/* 1.0.19 노래 나라별 묶음 */
+.song-group { display: flex; align-items: baseline; gap: 8px; font-size: 20px; font-weight: 800; margin: 30px 0 4px; padding-bottom: 8px; border-bottom: 2px solid var(--ink-3); }
+.song-group:first-of-type { margin-top: 18px; }
+.song-group span { font-size: 13px; font-weight: 500; color: var(--ink-3); }
+.song-genre { display: flex; align-items: center; gap: 10px; margin: 6px 0 10px; font-size: 14px; color: var(--ink-2); }
+.song-genre select { font: inherit; color: var(--ink); background: var(--field); border: 1px solid var(--card-edge); border-radius: 8px; padding: 6px 10px; }
+/* 1.0.19 단어장 줄의 '할 단어 10 · 19개'가 두 줄로 쪼개지지 않게: 개수 쪽은 한 줄로 두고 제목이 줄을 바꾼다 */
+.deck-count { white-space: nowrap; flex-shrink: 0; }
 .seal-empty.fill, .cal-cell .mark.fill, .cal-legend .k.fill { border-color: var(--makeup); }
 .seal-empty.fill::after { border-color: var(--makeup); }
 .seal-empty.wait, .cal-cell .mark.wait { border: 1.5px dashed var(--makeup); }
