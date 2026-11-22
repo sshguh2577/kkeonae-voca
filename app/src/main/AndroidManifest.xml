@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 인터넷은 '업데이트 확인'에서 새 버전을 받을 때만 쓴다. 학습 기록은 폰 밖으로 나가지 않는다. -->
+    <!-- 인터넷은 새 버전 받기, 지문 받기, 아침 영어(브리핑 파일과 날씨)에만 쓴다. 학습 기록은 폰 밖으로 나가지 않는다. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 1.0.20 아침 영어 날씨: 대략적인 위치만, 앱을 쓰는 동안에만. 좌표는 소수 둘째 자리로 줄여 날씨 서비스에만 보낸다 -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -16,6 +18,11 @@
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
+        <!-- 1.0.20 아침 영어: 말로 답하기(음성 입력)와 Claude 앱으로 보내기 -->
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+        <package android:name="com.anthropic.claude" />
     </queries>
 
     <application

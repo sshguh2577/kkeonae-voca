@@ -27,7 +27,12 @@
     bonusCount: 10, // bonusSame이 꺼졌을 때: 갈래마다 하루에 써 볼 단어 수 (0이면 오늘 맞힌 단어 전부)
     bonusMode: 'en', // 쓰기 방식: en 뜻 보고 영어 쓰기, ko 영어 보고 뜻 쓰기, mix 번갈아
     readSize: 1, // 지문 글자 크기: 0 작게, 1 보통, 2 크게 (지문 화면 오른쪽 위 '가' 단추)
-    readAuto: true // 지문 자동 받기: 하루에 한 번, 앱을 켤 때 새 지문을 받아 온다 (폰 앱에서만)
+    readAuto: true, // 지문 자동 받기: 하루에 한 번, 앱을 켤 때 새 지문을 받아 온다 (폰 앱에서만)
+    n3: { on: true, h: 6, m: 20 }, // 1.0.20 아침 영어 알림
+    briefAuto: true, // 아침 영어 알림을 누르고 들어오면 바로 읽기
+    briefLoc: true, // 아침 영어 날씨: 폰의 대략적인 위치로 지금 있는 곳 (끄면 마지막으로 잡힌 곳, 잡힌 적이 없으면 날씨 없이)
+    briefKo: true, // 아침 영어 문장 아래 한국어 해석 보이기
+    briefRate: 0.9 // 아침 영어 읽는 빠르기 (0.75 느리게, 0.9 보통, 1.05 빠르게)
   };
   // 검사용 스위치: 1.0.10까지의 검사를 그때의 처음 값(하루 15개, 줄이기 켬, 쓰기 10개, 듣고 떠올리기 없음)으로 돌릴 때만 쓴다. 앱에서는 켜지지 않는다
   if (window.__kvLegacyDefaults) { DEFAULT_SETTINGS.newPerDay = 15; DEFAULT_SETTINGS.autoReduce = true; DEFAULT_SETTINGS.bonusSame = false; DEFAULT_SETTINGS.listen = false; }
@@ -134,7 +139,30 @@
       downloadUpdate: function () { if (has && A.downloadUpdate) A.downloadUpdate(); },
       installUpdate: function () { if (has && A.installUpdate) A.installUpdate(); },
       canFetchReads: has && typeof A.fetchReads === 'function',
-      fetchReads: function () { if (has && A.fetchReads) A.fetchReads(); } // 결과는 window.__native('reads', 글) 또는 ('reads-fail')로 온다
+      fetchReads: function () { if (has && A.fetchReads) A.fetchReads(); }, // 결과는 window.__native('reads', 글) 또는 ('reads-fail')로 온다
+      // 1.0.20 아침 영어. 결과는 window.__native로: 'brief'/'brief-fail', 'weather', 'loc-permission', 'tts'(start|id, done|id), 'speech'/'speech-fail', 'shared-text', 'open'
+      canFetchBrief: has && typeof A.fetchBrief === 'function',
+      fetchBrief: function () { if (has && A.fetchBrief) A.fetchBrief(); },
+      canWeather: has && typeof A.fetchWeather === 'function',
+      fetchWeather: function (arg) { if (has && A.fetchWeather) A.fetchWeather(arg); },
+      locStatus: function () { return has && A.locationStatus ? safe(function () { return JSON.parse(A.locationStatus()); }, null) : null; },
+      requestLocation: function () { if (has && A.requestLocation) A.requestLocation(); },
+      openLocationSettings: function () { if (has && A.openLocationSettings) A.openLocationSettings(); },
+      speakLine: function (text, id, rate) {
+        if (has && A.speakLine) return A.speakLine(text, id, rate);
+        if (has) { var r = A.speak(text); if (r === 1) setTimeout(function () { window.__native('tts', 'done|' + id); }, 1500 + text.length * 60); return r; } // 1.0.19 이하 폰 쪽: 끝 신호가 없어서 길이로 어림한다
+        if (!window.speechSynthesis) return -1;
+        var u = new SpeechSynthesisUtterance(text); u.lang = 'en-US'; u.rate = rate || 0.9;
+        u.onend = function () { window.__native('tts', 'done|' + id); };
+        speechSynthesis.cancel(); speechSynthesis.speak(u); return 1;
+      },
+      stopSpeak: function () { if (has && A.stopSpeak) A.stopSpeak(); else if (!has && window.speechSynthesis) speechSynthesis.cancel(); },
+      canSpeech: has && typeof A.startSpeech === 'function',
+      startSpeech: function () { if (has && A.startSpeech) A.startSpeech(); },
+      hasClaude: function () { return has && A.hasClaude ? safe(function () { return !!A.hasClaude(); }, false) : false; },
+      shareText: function (text, target) { if (has && A.shareText) A.shareText(text, target || ''); else { safe(function () { navigator.clipboard.writeText(text); }); window.__native('shared-text', 'fail'); } },
+      takeLaunchAction: function () { return has && A.takeLaunchAction ? safe(function () { return A.takeLaunchAction() || ''; }, '') : ''; },
+      testBrief: function () { if (has && A.testBriefNotification) A.testBriefNotification(); }
     };
   })();
 
@@ -162,6 +190,7 @@
     o.settings = Object.assign(clone(DEFAULT_SETTINGS), o.settings || {});
     o.settings.n1 = Object.assign(clone(DEFAULT_SETTINGS.n1), o.settings.n1 || {});
     o.settings.n2 = Object.assign(clone(DEFAULT_SETTINGS.n2), o.settings.n2 || {});
+    o.settings.n3 = Object.assign(clone(DEFAULT_SETTINGS.n3), o.settings.n3 || {}); // 1.0.20 아침 영어 알림
     o.decks = o.decks || {};
     values(o.decks).forEach(function (d) { if (!d.track) d.track = d.free ? 'song' : 'toeic'; }); // 1.0.8부터 단어장마다 갈래가 있다
     o.days = o.days || {};
@@ -896,6 +925,15 @@
     return d;
   }
   function readOn(id, key) { var l = (DB.readLog || {})[id]; return !!l && F.dayKey(l.at, dsh()) === key; } // 그날 읽었는가
+  // 1.0.20 첫 화면의 아침 영어 줄
+  function briefSection() {
+    if (!Native.canFetchBrief && !hasAnyBrief()) return '';
+    var key = todayKey(), d = (DB.briefs || {})[key], lg = (DB.briefLog || {})[key] || {};
+    // 오늘의 지문(.reads, .read-row)과 이름을 나눠 둔다. 지문 줄을 세는 곳이 아침 영어 줄까지 세지 않게
+    return '<section class="brief-home"><p class="lead"><strong>아침 영어</strong>날씨, 소식 3개, 오늘의 질문</p><ul class="read-list"><li><button class="brief-row" data-act="brief-open">' +
+      '<span class="badge brief-w">' + (d ? keyLabel(key) : '오늘') + '</span><span class="read-title">' + esc(d ? d.items[0].title : '오늘 브리핑 열기') + '</span>' +
+      (lg.heard ? '<span class="read-done">들음</span>' : lg.sent ? '<span class="read-done">답함</span>' : '') + '</button></li></ul></section>';
+  }
   function readSection() {
     var d = todayReads();
     if (!d) return '';
@@ -1105,6 +1143,7 @@
       revMs: Math.round(pace.revMs), newMs: Math.round(pace.newMs), // 알림의 '약 N분'도 홈 화면과 같은 내 속도로 잰다
       n1: { on: !!s.n1.on, h: s.n1.h, m: s.n1.m },
       n2: { on: !!s.n2.on, h: s.n2.h, m: s.n2.m },
+      n3: { on: !!s.n3.on, h: s.n3.h, m: s.n3.m }, // 1.0.20 아침 영어 (출석과 상관없이 날마다)
       hasCards: hasCards(), attended: attended,
       restDays: restDays, restFrom: F.addDaysKey(key, -7), restUntil: F.addDaysKey(key, 30), restDows: (s.restDows || []).slice(),
       weekRest: weekRest, start: trackStart('toeic') || '', mk: !!plan.makeup, newByMakeup: newByMakeup, // 1.0.17: 보충하는 날
@@ -1503,6 +1542,7 @@
     overlay.scrollTop = 0;
   }
   function closeOverlay(silent) {
+    if (state.overlay === 'brief') { B.autoPending = false; briefStop(false); } // 1.0.20 아침 영어를 닫으면 읽기도 멈춘다
     state.overlay = null; state.deckId = null;
     overlay.hidden = true; overlay.innerHTML = '';
     document.body.classList.remove('overlay-open');
@@ -1641,7 +1681,7 @@
         '<button class="btn text" data-act="load-sample">체험용 10단어 넣기</button></div></section>';
     }
     var track = homeTrack();
-    return head + trackToggle(track, plan) + (track === 'major' ? homeMajor() : homeToeic(plan)) + notices + readSection() + memorySection(track);
+    return head + trackToggle(track, plan) + (track === 'major' ? homeMajor() : homeToeic(plan)) + notices + briefSection() + readSection() + memorySection(track);
   }
   // 오늘 꺼낼 장수(숫자)에는 형광펜을 긋는다. 글로 된 머리말에는 긋지 않는다
   // 설명 글을 문장마다 묶는다. 한 줄에 다 안 들어가는 문장은 다음 줄에서 시작해서 '약 / 13분'처럼 문장 가운데에서 끊기지 않는다 (1.0.18).
@@ -2992,6 +3032,22 @@
           row('지문 파일', '파일로 받은 지문을 직접 넣을 수도 있어요.', '<button class="btn small quiet" data-act="import-file" data-target="toeic">가져오기</button>')
         : row('지문 파일', (rn ? '' : '지문 파일을 넣으면 ') + readState, '<button class="btn small quiet" data-act="import-file" data-target="toeic">가져오기</button>')) +
       '</section>';
+    // 1.0.20 아침 영어
+    var bsy = DB.meta.briefSync || {}, lst = Native.locStatus(), bp = briefPlace();
+    var locDesc = s.briefLoc === false ? (bp ? '꺼 두면 마지막으로 위치를 잡은 곳(' + esc(placeLabel(bp)) + ') 날씨만 보여 줘요.' : '꺼 두면 날씨는 빼고 읽어요. 켜면 지금 있는 곳 날씨를 보여 줘요.')
+      : !lst ? '폰의 대략적인 위치로 지금 있는 곳 날씨를 보여 줘요.'
+      : !lst.granted ? '위치 권한이 아직 없어요. 권한을 주면 지금 있는 곳 날씨를 보여 줘요. 그전에는 ' + (bp ? '마지막으로 잡은 곳(' + esc(placeLabel(bp)) + ') 날씨예요.' : '날씨는 빼고 읽어요.')
+      : !lst.enabled ? '폰 위치가 꺼져 있어요. ' + (bp ? '꺼져 있으면 마지막으로 잡은 곳(' + esc(placeLabel(bp)) + ') 날씨예요.' : '켜면 지금 있는 곳 날씨를 보여 줘요.')
+      : '폰의 대략적인 위치(몇 km 단위)로 지금 있는 곳 날씨를 보여 줘요. 위치는 날씨를 받을 때만 쓰고, 날씨 서비스에만 보내요.';
+    var locCtl = sw('briefLoc', s.briefLoc !== false, '지금 있는 곳 날씨');
+    if (s.briefLoc !== false && lst && !lst.granted) locCtl = '<button class="btn small primary" data-act="brief-loc">권한 주기</button>' + locCtl;
+    else if (s.briefLoc !== false && lst && !lst.enabled) locCtl = '<button class="btn small quiet" data-act="brief-loc-on">위치 켜기</button>' + locCtl;
+    html += '<section class="group"><h2>아침 영어</h2>' +
+      row('아침 영어 열기', '날씨와 금융·보험, 토목, 세계 소식 하나씩, 그리고 오늘의 질문이에요. 출석과는 상관없어요.', '<button class="btn small quiet" data-act="brief-open">열기</button>') +
+      row('알림을 누르면 바로 읽기', '아침 영어 알림을 누르고 들어오면 처음부터 소리 내어 읽어 줘요.', sw('briefAuto', s.briefAuto !== false, '알림을 누르면 바로 읽기')) +
+      row('지금 있는 곳 날씨', locDesc, locCtl) +
+      (Native.canFetchBrief ? row('새 브리핑 확인', '날마다 새벽 5시 반쯤 새 글이 올라와요. ' + (bsy.okAt ? '마지막으로 받은 때는 ' + josa(whenLabel(bsy.okAt), '이에요/예요') + '.' : '아직 받은 적이 없어요.'), '<button class="btn small quiet" data-act="brief-sync">지금 확인</button>') : '') +
+      '</section>';
     html += '<section class="group"><h2>쓰기 (직접 써 보기)</h2>' +
       row('쓰기 단어 수', '오늘 카드를 다 꺼내면 쓰기 단계가 열려요. \'새 단어만큼\'은 하루 새 단어 수와 같은 수예요(토익 ' + bonusCountForSame('toeic') + '개, 전공 ' + bonusCountForSame('major') + '개). 토익과 전공에 따로 적용돼요.',
         seg('bonusPick', [['same', '새 단어만큼'], [10, '10'], [15, '15'], [20, '20'], [0, '전부']], s.bonusSame ? 'same' : s.bonusCount)) +
@@ -3001,12 +3057,13 @@
     var ns = Native.notifStatus();
     html += '<section class="group"><h2>알림</h2>' +
       row('오늘 공부 알림', '오늘 할 카드 수와 걸리는 시간을 알려 줘요. 전공 카드가 있으면 같이 알려 줘요.', '<input class="time-input" type="time" data-input="time" data-name="n1" value="' + timeVal(s.n1) + '" aria-label="오늘 공부 알림 시간">' + sw('n1on', s.n1.on, '오늘 공부 알림 켜기')) +
-      row('출석 마감 알림', '아직 출석 전이면 한 번 더 알려 줘요. 토익과 전공 출석을 다 했으면 오지 않아요.', '<input class="time-input" type="time" data-input="time" data-name="n2" value="' + timeVal(s.n2) + '" aria-label="출석 마감 알림 시간">' + sw('n2on', s.n2.on, '출석 마감 알림 켜기'));
+      row('출석 마감 알림', '아직 출석 전이면 한 번 더 알려 줘요. 토익과 전공 출석을 다 했으면 오지 않아요.', '<input class="time-input" type="time" data-input="time" data-name="n2" value="' + timeVal(s.n2) + '" aria-label="출석 마감 알림 시간">' + sw('n2on', s.n2.on, '출석 마감 알림 켜기')) +
+      row('아침 영어 알림', '날마다 이 시간에 와요. 쉬는 날에도 와요. 누르면 아침 영어가 열리고 읽어 줘요.', '<input class="time-input" type="time" data-input="time" data-name="n3" value="' + timeVal(s.n3) + '" aria-label="아침 영어 알림 시간">' + sw('n3on', s.n3.on, '아침 영어 알림 켜기'));
     if (ns) {
       html += row('알림 허용', '', ns.granted ? '<span class="status-ok">켜짐</span>' : '<button class="btn small primary" data-act="notif-on">켜기</button>');
       if (ns.sdk >= 31) html += row('정확한 시간에 알림', '꺼져 있으면 알림이 몇 분 늦게 올 수 있어요.', ns.exact ? '<span class="status-ok">켜짐</span>' : '<button class="btn small quiet" data-act="exact-alarm">허용하기</button>');
       html += row('배터리 최적화 예외', (String(ns.maker).toLowerCase() === 'samsung' ? '삼성 폰은 이걸 해 둬야 알림이 늦지 않아요.' : '알림이 늦게 오면 이걸 해 주세요.'), ns.battery ? '<span class="status-ok">적용됨</span>' : '<button class="btn small quiet" data-act="battery">예외 설정</button>');
-      html += '<div class="btn-list"><button class="btn quiet wide" data-act="notif-test">지금 알림 보내 보기</button></div>';
+      html += '<div class="btn-list"><button class="btn quiet wide" data-act="notif-test">지금 알림 보내 보기</button><button class="btn quiet wide" data-act="notif-test-brief">아침 영어 알림 보내 보기</button></div>';
     } else {
       html += '<p class="hint">웹 미리보기에서는 알림을 쓸 수 없어요. 앱에서 확인해 주세요.</p>';
     }
@@ -3067,7 +3124,7 @@
     'reveal': function () { S.cur.revealed = true; renderStudy(); },
     'grade': function (el) { grade(+el.dataset.g); },
     'undo': function () { undoLast(); },
-    'speak': function (el) { speak(el.dataset.text); },
+    'speak': function (el) { if (B.playing) briefStop(false); speak(el.dataset.text); }, // 1.0.20: 아침 영어를 읽는 중에 단어를 누르면 읽기를 멈추고 단어를 읽는다
     'type-check': function () { submitTyped(); },
     'type-giveup': function () { S.cur.typed = ''; S.cur.verdict = { ok: false }; renderStudy(); },
     'type-override': function () { S.cur.verdict = { ok: true, exact: true }; renderStudy(); },
@@ -3150,6 +3207,49 @@
     },
     'read-open': function (el) { openRead(el.dataset.id); },
     'reads-sync': function () { syncReads(true); },
+    // 1.0.20 아침 영어
+    'brief-open': function () { openBrief({}); },
+    'brief-day': function (el) { briefStop(false); B.key = el.dataset.k; B.idx = -1; renderBrief(); overlay.scrollTop = 0; },
+    'brief-sync': function () { syncBrief(true); },
+    'brief-play': function () {
+      if (B.playing && !B.single) { briefStop(false); return; }
+      briefPlay(B.idx > 0 && B.idx < B.lines.length ? B.idx : 0, false);
+    },
+    'brief-line': function (el) { // 문장을 누르면 그 문장만 읽는다 (이어 듣기 위치도 그 문장으로)
+      var i = B.lines.map(function (l) { return l.k; }).indexOf(el.dataset.k);
+      if (i >= 0) briefPlay(i, true);
+    },
+    'brief-ko': function () { DB.settings.briefKo = DB.settings.briefKo === false; saveSoon(); var v = overlay.querySelector('.brief-view'); if (v) v.classList.toggle('no-ko', DB.settings.briefKo === false); updateBriefBar(); },
+    'brief-rate': function () {
+      var cur = briefRate(), i = BRIEF_RATES.map(function (r) { return r[0]; }).indexOf(cur);
+      DB.settings.briefRate = BRIEF_RATES[(i + 1) % BRIEF_RATES.length][0]; saveSoon(); updateBriefBar();
+      toast('읽는 빠르기: ' + BRIEF_RATES[(i + 1) % BRIEF_RATES.length][1]);
+    },
+    'brief-weather': function () { syncWeather(true); briefWeatherChanged(); },
+    'brief-loc': function () { DB.meta.briefLocAsked = true; DB.settings.briefLoc = true; saveSoon(); Native.requestLocation(); },
+    'brief-loc-on': function () { Native.openLocationSettings(); toast('위치를 켜고 돌아오면 지금 있는 곳 날씨로 바꿔요.'); },
+    'brief-loc-no': function () { DB.meta.briefLocAsked = true; DB.settings.briefLoc = false; saveSoon(); B.weather = null; syncWeather(true); briefWeatherChanged(); var bp = briefPlace(); toast(bp ? '위치 없이 ' + placeLabel(bp) + ' 날씨를 보여 줄게요. 설정의 아침 영어에서 바꿀 수 있어요.' : '위치를 쓰지 않을게요. 날씨는 빼고 읽어요. 설정의 아침 영어에서 바꿀 수 있어요.'); },
+    'brief-mic': function () { briefStop(false); Native.startSpeech(); },
+    'brief-send': function (el) {
+      var day = (DB.briefs || {})[el.dataset.k], ta = document.getElementById('brief-answer'), ans = ta ? ta.value.trim() : '';
+      if (!day || !day.question) return;
+      if (!ans) { toast('먼저 영어로 답을 써 주세요. 한 문장도 괜찮아요.'); if (ta) ta.focus(); return; }
+      if (ta) saveBriefAnswer(ta);
+      briefStop(false);
+      var text = briefAnswerText(day, ans);
+      Native.copy(text); // Claude 앱에 글이 안 들어가 있으면 붙여 넣을 수 있게
+      briefLog(day.date).sent = Date.now(); saveNow();
+      Native.shareText(text, 'claude');
+    },
+    'brief-talk': function (el) {
+      var day = (DB.briefs || {})[el.dataset.k]; if (!day) return;
+      briefStop(false);
+      var text = briefTalkText(day);
+      Native.copy(text);
+      briefLog(day.date).talk = Date.now(); saveNow();
+      Native.shareText(text, 'claude');
+    },
+    'notif-test-brief': function () { saveNow(); Native.testBrief(); toast('아침 영어 알림을 보냈어요. 누르면 브리핑이 열려요.'); },
     'read-word': function (el) { // 1.0.17: 뜻을 연 낱말은 '눌러 본 낱말'에 모은다 (닫을 때는 안 센다)
       var w = el.dataset.w;
       if (state.readWord === w) state.readWord = '';
@@ -3386,6 +3486,7 @@
   });
   document.addEventListener('input', function (e) {
     var t = e.target;
+    if (t.dataset.input === 'brief-answer') { saveBriefAnswer(t); return; } // 1.0.20
     if (t.dataset.input === 'search') {
       // 입력창은 그대로 두고 결과만 바꿔야 한글 조합이 끊기지 않는다
       state.search = t.value;
@@ -3399,9 +3500,16 @@
       var name = t.dataset.name;
       if (name === 'n1on') DB.settings.n1.on = t.checked;
       else if (name === 'n2on') DB.settings.n2.on = t.checked;
+      else if (name === 'n3on') DB.settings.n3.on = t.checked;
       else DB.settings[name] = t.checked;
       saveNow();
-      if ((name === 'n1on' || name === 'n2on') && t.checked) { var ns = Native.notifStatus(); if (ns && !ns.granted) Native.requestNotif(); }
+      if ((name === 'n1on' || name === 'n2on' || name === 'n3on') && t.checked) { var ns = Native.notifStatus(); if (ns && !ns.granted) Native.requestNotif(); }
+      if (name === 'briefLoc') { // 1.0.20: 켜면 위치 권한을 묻는다. 끄면 마지막으로 잡힌 곳 날씨
+        DB.meta.briefLocAsked = true; B.weather = null; saveNow();
+        var lsx = Native.locStatus();
+        if (t.checked && lsx && !lsx.granted) Native.requestLocation();
+        render();
+      }
     } else if (t.dataset.input === 'song-genre') { // 1.0.19
       var sd = DB.decks[t.dataset.id];
       if (sd) { sd.genre = t.value; saveNow(); toast(t.value ? '‘' + t.value + '’' + josa(t.value, '으로/로').slice(t.value.length) + ' 묶었어요.' : '장르를 비웠어요. 노래 탭 맨 아래에 따로 모여요.'); }
@@ -3427,6 +3535,27 @@
     if (evt === 'update-done') { onUpdateDone(arg); return; }
     if (evt === 'reads') { onReadsText(arg); return; }
     if (evt === 'reads-fail') { onReadsFail(); return; }
+    // 1.0.20 아침 영어
+    if (evt === 'brief') { onBriefText(arg); return; }
+    if (evt === 'brief-fail') { onBriefFail(); return; }
+    if (evt === 'weather') { onWeather(arg); return; }
+    if (evt === 'tts') { onBriefTts(arg); return; }
+    if (evt === 'open') { if (arg === 'brief' && !loadProblem) openBrief({ auto: true }); return; }
+    if (evt === 'loc-permission') {
+      if (arg === '1') { B.weather = null; syncWeather(true); toast('지금 있는 곳 날씨를 받아 올게요.'); }
+      else if (arg === 'settings') toast('앱 정보 > 권한 > 위치에서 켜 주세요.' + (briefPlace() ? ' 켜기 전에는 마지막으로 잡힌 곳 날씨예요.' : ' 켜기 전에는 날씨는 빼고 읽어요.'));
+      else toast(briefPlace() ? '위치 권한 없이 마지막으로 잡힌 곳 날씨를 보여 줄게요.' : '위치 권한이 없어서 날씨는 빼고 읽어요. 설정의 아침 영어에서 언제든 켤 수 있어요.');
+      if (state.overlay === 'brief') briefWeatherChanged(); else if (state.tab === 'settings' && !state.overlay) render();
+      return;
+    }
+    if (evt === 'speech') { onSpeechText(arg); return; }
+    if (evt === 'speech-fail') { if (arg === 'none') toast('이 폰에서는 말로 입력을 열지 못했어요. 키보드의 마이크 단추로 말해 보세요.'); else if (arg !== 'cancel') toast('말소리를 알아듣지 못했어요. 다시 한 번 말해 주세요.'); return; }
+    if (evt === 'shared-text') {
+      if (arg === 'claude') toast('Claude 앱이 열렸어요. 보내기를 누르면 돼요. 글이 안 들어가 있으면 붙여 넣어 주세요.');
+      else if (arg === 'chooser') toast('보낼 곳에서 Claude를 골라 주세요. 글은 복사해 두었어요.');
+      else toast('보내기 화면을 열지 못했어요. 글을 복사해 두었으니 Claude 앱에 붙여 넣어 주세요.');
+      return;
+    }
     if (evt === 'picked') {
       var text = Native.takePicked();
       if (!text) { if (arg) toast('빈 파일이에요.'); return; }
@@ -3450,10 +3579,13 @@
       if (todayKey() !== lastDayRendered && !S) { lastDayRendered = todayKey(); render(); }
       else if (!S && !state.overlay) render();
       syncReads(false); // 날이 바뀌었거나 아까 못 받았으면 지문을 받아 본다
+      syncBrief(false); // 1.0.20 오늘 브리핑이 아직 없으면 받아 본다
+      if (state.overlay === 'brief') { var bx = document.getElementById('brief-weather'); if (bx && !B.wBusy && (!B.weather || Date.now() - B.wAt > 20 * 60000 || B.weather.src !== 'here')) { syncWeather(true); briefWeatherChanged(); } } // 위치를 켜고 돌아왔을 때
     } else if (evt === 'pause') { clockAway(); saveNow(); }
   };
   window.__handleBack = function () {
     if (closeTopModal()) return true;
+    if (state.overlay === 'brief' && B.playing) { briefStop(false); return true; } // 1.0.20: 읽는 중이면 먼저 멈춘다
     if (state.overlay === 'study') { finishStudy(); return true; }
     if (state.overlay) { closeOverlay(); return true; }
     if (state.tab !== 'home') { setTab('home'); return true; }
@@ -3469,6 +3601,11 @@
   });
   window.addEventListener('pagehide', saveNow);
   document.addEventListener('keydown', function () { awayAt = 0; }, true);
+  // 1.0.20: 글자 조각 단추(role=button)도 키보드 Enter·Space로 누를 수 있게
+  document.addEventListener('keydown', function (e) {
+    var t = e.target;
+    if ((e.key === 'Enter' || e.key === ' ') && t && t.getAttribute && t.getAttribute('role') === 'button' && t.dataset && t.dataset.act) { e.preventDefault(); t.click(); }
+  });
   // 영어 글꼴을 다 받거나 화면 폭이 바뀌면 큰 영어 단어의 크기를 다시 맞춘다
   if (document.fonts && document.fonts.addEventListener) document.fonts.addEventListener('loadingdone', function () { fitWords(); });
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { fitWords(); });
@@ -3509,6 +3646,414 @@
     if (loud) toast('지문을 받지 못했어요. 인터넷 연결을 확인해 주세요.');
   }
   function whenLabel(ms) { var d = new Date(ms); return shortDate(ms) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+
+  /* ================= 아침 영어 (1.0.20) =================
+     글(금융·보험, 토목, 세계 소식 하나씩과 오늘의 질문)은 날마다 새벽에 Claude가 써서 깃허브 brief 가지에 올린다.
+     폰이 받아 와 DB.briefs에 날짜별로 둔다(최근 14일). 날짜는 앱의 하루(새벽 4시 기준)와 같다.
+     날씨는 폰이 지금 있는 곳(대략적인 위치)으로 Open-Meteo에서 받고, 영어·한국어 문장은 여기서 정해진 틀로 만든다.
+     읽기는 문장마다: Native.speakLine → 'tts' done 신호 → 다음 문장. 출석·도장과는 상관없다. */
+  var BRIEF_CATS = { finance: '금융·보험', civil: '토목', world: '세계' };
+  var BRIEF_CAT_SAY = { finance: 'Finance and insurance news.', civil: 'Civil engineering news.', world: 'World news.' };
+  var BRIEF_BADGE = { finance: 'read-fin', civil: 'read-civ', world: 'read-world' };
+  var BRIEF_RATES = [[0.75, '느리게'], [0.9, '보통'], [1.05, '빠르게']];
+  var B = { key: null, lines: [], idx: -1, playing: false, single: false, gen: 0, curId: null, retry: 0, autoPending: false, waitBrief: false,
+    weather: null, wAt: 0, wBusy: false, wErr: '' };
+
+  function briefRate() { var r = +DB.settings.briefRate; return r >= 0.5 && r <= 1.6 ? r : 0.9; }
+  function briefLog(key) { var L = DB.briefLog || (DB.briefLog = {}); return L[key] || (L[key] = {}); }
+  function hasAnyBrief() { return !!DB.briefs && Object.keys(DB.briefs).length > 0; }
+  // 보여 줄 날: 그날 것이 있으면 그날, 없으면 그 앞의 가장 최근 것
+  function briefPick(key) {
+    var b = DB.briefs || {};
+    if (b[key]) return b[key];
+    var ks = Object.keys(b).filter(function (k) { return k < key; }).sort();
+    return ks.length ? b[ks[ks.length - 1]] : null;
+  }
+
+  /* ---------- 받기 ---------- */
+  var briefFetchAt = 0, briefLoud = false;
+  function syncBrief(loud) {
+    if (!Native.canFetchBrief || loadProblem) { if (loud) toast('브리핑 받기는 폰 앱에서만 돼요.'); return false; }
+    var s = DB.meta.briefSync || (DB.meta.briefSync = {}), now = Date.now(), key = todayKey();
+    if (!loud) {
+      if (DB.briefs && DB.briefs[key]) return false;                                  // 오늘 것은 이미 받았다
+      if (s.tryAt && now >= s.tryAt && now - s.tryAt < 10 * 60000) return false;       // 방금 해 봤으면 10분 뒤에
+    }
+    if (briefFetchAt && now >= briefFetchAt && now - briefFetchAt < 30000) { if (loud) toast('지금 받고 있어요.'); return false; }
+    briefFetchAt = now; briefLoud = !!loud; s.tryAt = now; saveSoon();
+    Native.fetchBrief();
+    return true;
+  }
+  function onBriefText(text) {
+    var loud = briefLoud; briefFetchAt = 0; briefLoud = false;
+    var obj = null;
+    try { obj = JSON.parse(String(text || '')); } catch (e) { obj = null; }
+    if (!obj || obj.kind !== 'kkeonae-brief' || !Array.isArray(obj.days)) { if (loud) toast('받은 브리핑 파일을 읽지 못했어요. 잠시 뒤에 다시 해 주세요.'); return; }
+    var res = importBriefs(obj), now = Date.now();
+    DB.meta.briefSync = { okAt: now, tryAt: now, latest: res.latest };
+    saveNow();
+    B.waitBrief = false;
+    if (state.overlay === 'brief') { if (res.added && B.playing) briefStop(false); if (!B.playing) renderBrief(); briefMaybeAutoPlay(); } // 읽는 중에 새 글이 오면 멈추고 새 글로 바꾼다
+    else if (!S && !state.overlay && (state.tab === 'home' || state.tab === 'settings')) render();
+    if (loud) toast(res.added ? '새 브리핑을 받았어요.' : DB.briefs[todayKey()] ? '오늘 브리핑은 이미 받아 두었어요.' : '오늘 브리핑은 아직 안 올라왔어요. 새벽 5시 반쯤 올라와요.');
+  }
+  function onBriefFail() {
+    var loud = briefLoud; briefFetchAt = 0; briefLoud = false;
+    B.waitBrief = false; briefMaybeAutoPlay();
+    if (loud) toast('브리핑을 받지 못했어요. 인터넷 연결을 확인해 주세요.');
+  }
+  // 알림을 눌러 열었을 때: 날씨와 오늘 글을 다 받은 뒤(또는 6초가 지나면) 처음부터 읽는다
+  function briefMaybeAutoPlay(force) {
+    if (!B.autoPending || state.overlay !== 'brief') return;
+    if (!force && (B.wBusy || B.waitBrief)) return;
+    B.autoPending = false;
+    if (B.lines.length) briefPlay(0, false);
+  }
+  // 받은 날짜별 글을 넣는다. 형식이 어긋난 날은 건너뛴다(앱이 멈추지 않게). 14일보다 오래된 날은 지운다
+  function importBriefs(obj) {
+    var b = DB.briefs || (DB.briefs = {}), added = 0, latest = '';
+    obj.days.slice(0, 14).forEach(function (d) {
+      var x = cleanBriefDay(d);
+      if (!x) return;
+      if (!b[x.date]) added++;
+      b[x.date] = x;
+      if (x.date > latest) latest = x.date;
+    });
+    Object.keys(b).sort().reverse().slice(14).forEach(function (k) { delete b[k]; });
+    var L = DB.briefLog || {};
+    Object.keys(L).sort().reverse().slice(60).forEach(function (k) { delete L[k]; });
+    return { added: added, latest: latest };
+  }
+  function cleanBriefDay(d) {
+    if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(String(d.date || '')) || !Array.isArray(d.items)) return null;
+    var items = d.items.map(function (it) {
+      if (!it || !own(BRIEF_CATS, it.cat) || !Array.isArray(it.en)) return null;
+      var en = it.en.map(str).filter(Boolean).slice(0, 6);
+      if (!en.length) return null;
+      var ko = Array.isArray(it.ko) ? it.ko.slice(0, en.length).map(str) : [];
+      var src = it.source && /^https:\/\//.test(str(it.source.url)) ? { name: str(it.source.name).slice(0, 40) || '기사', url: str(it.source.url).slice(0, 500) } : null;
+      return { cat: it.cat, title: str(it.title).slice(0, 90), titleKo: str(it.titleKo).slice(0, 60), en: en, ko: ko, source: src,
+        words: (Array.isArray(it.words) ? it.words : []).filter(function (w) { return w && str(w.w) && str(w.m); }).slice(0, 5)
+          .map(function (w) { return { w: str(w.w).slice(0, 40), m: str(w.m).slice(0, 40) }; }) };
+    }).filter(Boolean);
+    if (!items.length) return null;
+    var q = d.question || {};
+    return { date: d.date, items: items,
+      question: str(q.en) ? { en: str(q.en).slice(0, 220), ko: str(q.ko).slice(0, 220), starters: (Array.isArray(q.starters) ? q.starters : []).map(str).filter(Boolean).slice(0, 3) } : null };
+  }
+
+  /* ---------- 날씨 ---------- */
+  // 마지막으로 위치를 잡은 곳(폰 안에만 있다). 앱에 정해 둔 도시는 없어서, 한 번도 못 잡았으면 null
+  function briefPlace() { var p = DB.meta.briefPlace; return p && isFinite(p.lat) && isFinite(p.lon) ? p : null; }
+  function placeLabel(p) { return p && p.ko ? p.ko : '마지막으로 잡은 곳'; }
+  function syncWeather(force) {
+    if (!Native.canWeather || B.wBusy) return false;
+    if (!force && B.weather && Date.now() - B.wAt < 20 * 60000) return false;
+    var p = briefPlace(), arg = { useLoc: DB.settings.briefLoc !== false };
+    if (p) { arg.lat = p.lat; arg.lon = p.lon; arg.ko = p.ko || ''; arg.en = p.en || ''; } // 위치를 못 쓰면 이곳 날씨. 없으면 빼고 보낸다
+    B.wBusy = true; B.wErr = '';
+    Native.fetchWeather(JSON.stringify(arg));
+    setTimeout(function () { if (B.wBusy) { B.wBusy = false; B.wErr = 'slow'; briefWeatherChanged(); } }, 25000); // 25초가 지나도 안 오면 그만 기다린다
+    return true;
+  }
+  function onWeather(arg) {
+    B.wBusy = false;
+    var o = null;
+    try { o = JSON.parse(String(arg || '')); } catch (e) { o = null; }
+    if (!o || !o.ok || !o.data || !weatherLines(o)) { B.wErr = o && o.noplace ? 'noplace' : (o && o.src) || 'net'; briefWeatherChanged(); return; } // noplace: 위치를 못 쓰고 잡은 적도 없음
+    B.weather = o; B.wAt = Date.now(); B.wErr = '';
+    if (o.src === 'here') { // 마지막으로 잡힌 곳을 기억해 둔다 (좌표는 폰이 소수 둘째 자리로 줄여서 준다)
+      var old = DB.meta.briefPlace || {};
+      DB.meta.briefPlace = { lat: o.lat, lon: o.lon, ko: o.ko || old.ko || '', en: o.en || old.en || '', at: Date.now() };
+      saveSoon();
+    }
+    briefWeatherChanged();
+  }
+  function briefWeatherChanged() {
+    if (state.overlay !== 'brief') return;
+    var box = document.getElementById('brief-weather');
+    if (box) { box.outerHTML = weatherCardHTML(); rebuildLines(); } else renderBrief();
+    briefMaybeAutoPlay();
+  }
+  var WMO = { 0: ['The sky is clear.', '하늘이 맑아요.'], 1: ['It\'s mostly sunny.', '대체로 맑아요.'], 2: ['It\'s partly cloudy.', '구름이 조금 있어요.'], 3: ['It\'s cloudy.', '흐려요.'],
+    45: ['It\'s foggy.', '안개가 꼈어요.'], 48: ['It\'s foggy.', '안개가 꼈어요.'],
+    51: ['It\'s drizzling.', '이슬비가 내려요.'], 53: ['It\'s drizzling.', '이슬비가 내려요.'], 55: ['It\'s drizzling.', '이슬비가 내려요.'],
+    56: ['Icy drizzle is falling.', '얼어붙는 이슬비가 내려요.'], 57: ['Icy drizzle is falling.', '얼어붙는 이슬비가 내려요.'],
+    61: ['It\'s raining a little.', '비가 조금 와요.'], 63: ['It\'s raining.', '비가 와요.'], 65: ['It\'s raining hard.', '비가 많이 와요.'],
+    66: ['Freezing rain is falling.', '얼어붙는 비가 내려요.'], 67: ['Freezing rain is falling.', '얼어붙는 비가 내려요.'],
+    71: ['It\'s snowing a little.', '눈이 조금 와요.'], 73: ['It\'s snowing.', '눈이 와요.'], 75: ['It\'s snowing hard.', '눈이 많이 와요.'], 77: ['Small snow grains are falling.', '싸락눈이 내려요.'],
+    80: ['There are light rain showers.', '약한 소나기가 와요.'], 81: ['There are rain showers.', '소나기가 와요.'], 82: ['There are heavy rain showers.', '강한 소나기가 와요.'],
+    85: ['There are snow showers.', '눈이 오다 그치다 해요.'], 86: ['There are heavy snow showers.', '눈이 세게 오다 그치다 해요.'],
+    95: ['There\'s a thunderstorm.', '천둥 번개가 쳐요.'], 96: ['There\'s a thunderstorm with hail.', '우박과 함께 천둥 번개가 쳐요.'], 99: ['There\'s a thunderstorm with hail.', '우박과 함께 천둥 번개가 쳐요.'] };
+  function koDeg(t) { return t < 0 ? '영하 ' + (-t) + '도' : t + '도'; }
+  function sayDeg(text) { return text.replace(/(-?\d+)°C/g, function (m, n) { n = +n; return (n < 0 ? 'minus ' + (-n) : n) + ' degrees'; }); }
+  // Open-Meteo 응답으로 날씨 문장 3~5개를 만든다. 값이 없으면 null
+  function weatherLines(w) {
+    var d = (w && w.data) || {}, cur = d.current || d.current_weather || {}, day = d.daily || {};
+    var val = function (o, a, b) { var v = o[a] != null ? o[a] : (b ? o[b] : null); if (Array.isArray(v)) v = v[0]; return v == null || v === '' ? NaN : +v; };
+    var t = Math.round(val(cur, 'temperature_2m', 'temperature'));
+    if (!isFinite(t)) return null;
+    var feel = Math.round(val(cur, 'apparent_temperature')), code = val(cur, 'weather_code', 'weathercode'), wind = val(cur, 'wind_speed_10m', 'windspeed');
+    var hi = Math.round(val(day, 'temperature_2m_max')), lo = Math.round(val(day, 'temperature_2m_min')), pop = Math.round(val(day, 'precipitation_probability_max')), uv = val(day, 'uv_index_max');
+    var dcode = val(day, 'weather_code', 'weathercode');
+    var en = w.en || '', ko = w.ko || '';
+    var hour = new Date().getHours();
+    var hiEn = hour < 12 ? 'Good morning!' : hour < 18 ? 'Good afternoon!' : 'Good evening!', hiKo = hour < 12 ? '좋은 아침이에요!' : hour < 18 ? '좋은 오후예요!' : '좋은 저녁이에요!';
+    var out = [];
+    out.push({ en: hiEn + ' It\'s ' + t + '°C in ' + (en || 'your area') + ' right now.', ko: hiKo + ' 지금 ' + (ko ? josa(ko, '은/는') : '여기는') + ' ' + koDeg(t) + '예요.' });
+    if (isFinite(feel) && Math.abs(feel - t) >= 3) out.push({ en: 'It feels like ' + feel + '°C.', ko: '체감 온도는 ' + koDeg(feel) + '예요.' });
+    var c = WMO[code];
+    if (c) out.push({ en: c[0], ko: c[1] });
+    if (isFinite(hi) && isFinite(lo)) out.push({ en: 'Today\'s high is ' + hi + '°C, and the low is ' + lo + '°C.', ko: '오늘 최고 기온은 ' + koDeg(hi) + ', 최저 기온은 ' + koDeg(lo) + '예요.' });
+    var snowy = [71, 73, 75, 77, 85, 86].indexOf(dcode) >= 0;
+    var tip = null;
+    if (snowy && (!isFinite(pop) || pop >= 30)) tip = ['It may snow today, so be careful on icy roads.', '오늘 눈이 올 수 있으니 미끄러운 길을 조심하세요.'];
+    else if (pop >= 60) tip = ['There\'s a ' + pop + '% chance of rain, so take an umbrella.', '비 올 확률이 ' + pop + '%라서 우산을 챙기세요.'];
+    else if (pop >= 30) tip = ['It might rain later, so a small umbrella is a good idea.', '나중에 비가 올 수도 있으니 작은 우산이 있으면 좋아요.'];
+    else if (isFinite(lo) && lo <= 0) tip = ['It will be below zero today, so dress warmly.', '오늘은 영하로 내려가니 옷을 따뜻하게 입으세요.'];
+    else if (hi >= 30) tip = ['It will be hot, so drink plenty of water.', '더우니까 물을 많이 마시세요.'];
+    else if (wind >= 30) tip = ['It\'s windy today, so hold on to your hat.', '오늘은 바람이 세니 모자를 꽉 잡으세요.'];
+    else if (uv >= 8) tip = ['The sun is strong, so wear sunscreen.', '햇볕이 강하니 선크림을 바르세요.'];
+    else if (isFinite(pop)) tip = ['It looks like a dry day.', '오늘은 비 소식이 없어요.'];
+    if (tip) out.push({ en: tip[0], ko: tip[1] });
+    return out;
+  }
+
+  /* ---------- 읽을 문장 목록 ---------- */
+  function briefLines(day) {
+    var out = [];
+    var wl = B.weather && (B.key || todayKey()) === todayKey() ? weatherLines(B.weather) : null; // 날씨는 오늘 브리핑에만
+    (wl || []).forEach(function (l, i) { out.push({ k: 'w' + i, en: l.en, ko: l.ko, say: sayDeg(l.en) }); });
+    if (day) {
+      day.items.forEach(function (it, n) {
+        out.push({ k: 'i' + n + 't', en: it.title, ko: it.titleKo, say: BRIEF_CAT_SAY[it.cat] + ' ' + it.title + '.', title: true });
+        it.en.forEach(function (e, j) { out.push({ k: 'i' + n + '-' + j, en: e, ko: it.ko[j] || '' }); });
+      });
+      if (day.question) out.push({ k: 'q', en: day.question.en, ko: day.question.ko, say: 'Today\'s question. ' + day.question.en });
+    }
+    return out;
+  }
+  function rebuildLines() {
+    var cur = B.lines[B.idx] && B.lines[B.idx].k;
+    B.lines = briefLines(briefPick(B.key));
+    if (cur) { var ni = B.lines.map(function (l) { return l.k; }).indexOf(cur); B.idx = ni; if (ni < 0 && B.playing) briefStop(false); }
+    markNow();
+  }
+
+  /* ---------- 화면 ---------- */
+  function openBrief(opt) {
+    opt = opt || {};
+    briefStop(false);
+    if (S) { toast('공부를 마친 뒤에 아침 영어를 열어 주세요.'); return; } // 공부 중에는 공부 화면을 덮지 않는다
+    if (!opt.keepModals) closeAllModals();
+    B.key = opt.key || todayKey(); B.idx = -1;
+    openOverlay('brief', '');
+    renderBrief();
+    syncWeather(false);
+    B.waitBrief = (!DB.briefs || !DB.briefs[todayKey()]) && syncBrief(false);
+    B.autoPending = !!opt.auto && DB.settings.briefAuto !== false;
+    if (B.autoPending) {
+      setTimeout(function () { briefMaybeAutoPlay(true); }, 6000); // 6초가 지나도 안 오면 있는 것으로 읽는다
+      briefMaybeAutoPlay();
+    }
+  }
+  function renderBrief() {
+    if (state.overlay !== 'brief') return;
+    var key = B.key || todayKey(), day = briefPick(key), log = day ? briefLog(day.date) : {};
+    B.lines = briefLines(day);
+    var html = '<div class="view brief-view' + (DB.settings.briefKo === false ? ' no-ko' : '') + '"><div class="cal-head"><button class="icon-btn" data-act="close-overlay" aria-label="뒤로">' + ICON.back + '</button><h2>아침 영어</h2><span></span></div>';
+    html += '<p class="brief-date">' + keyLabel(day ? day.date : key, true) + '</p>';
+    if (!day) {
+      html += '<p class="brief-note">' + (Native.canFetchBrief ? '브리핑을 아직 못 받았어요. 인터넷이 되면 새벽 5시 반쯤 올라온 글을 받아 와요.' : '브리핑은 폰 앱에서 받아요.') + '</p>';
+    } else if (day.date !== key && key === todayKey()) {
+      html += '<p class="brief-note">오늘 브리핑은 아직 안 왔어요. ' + josa(keyLabel(day.date), '을/를') + ' 먼저 보여 줄게요.</p>';
+    }
+    if (!day && Native.canFetchBrief || day && day.date !== todayKey() && key === todayKey()) html += '<button class="btn quiet wide" data-act="brief-sync" style="margin:0 0 12px">새 브리핑 받기</button>';
+    html += key === todayKey() ? weatherCardHTML() : '';
+    if (day) {
+      day.items.forEach(function (it, n) {
+        html += '<section class="brief-card"><p class="brief-kicker"><span class="badge ' + BRIEF_BADGE[it.cat] + '">' + BRIEF_CATS[it.cat] + '</span></p>' +
+          lineHTML('i' + n + 't', it.title, it.titleKo, 'brief-title') +
+          it.en.map(function (e, j) { return lineHTML('i' + n + '-' + j, e, it.ko[j] || ''); }).join('') +
+          (it.words.length ? '<ul class="brief-words" aria-label="알아 둘 단어">' + it.words.map(function (w) { return '<li><button data-act="speak" data-text="' + esc(w.w) + '"><b>' + esc(w.w) + '</b>' + esc(w.m) + '</button></li>'; }).join('') + '</ul>' : '') +
+          (it.source ? '<a class="brief-src" href="' + esc(it.source.url) + '" rel="noopener">출처: ' + esc(it.source.name) + '</a>' : '') + '</section>';
+      });
+      if (day.question) html += questionCardHTML(day, log);
+      if (keyToDate(day.date).getDay() === 0) html += sundayCardHTML(day);
+    }
+    html += pastBriefsHTML(day);
+    html += '<p class="hint brief-foot">아침 영어는 출석이나 도장과 상관없어요. 소식은 Claude가 기사를 읽고 쉬운 영어로 새로 쓴 글이에요.</p>';
+    html += briefBarHTML() + '</div>'; // 듣기 줄은 화면 아래에 붙어 있다(.brief-bar는 sticky)
+    overlay.innerHTML = html;
+    markNow();
+  }
+  function lineHTML(k, en, ko, cls) {
+    return '<p class="bl' + (cls ? ' ' + cls : '') + '" data-act="brief-line" data-k="' + k + '" role="button" tabindex="0"><span class="bl-en">' + esc(en) + '</span>' + (ko ? '<span class="bl-ko">' + sents(ko) + '</span>' : '') + '</p>'; // 해석은 쉼표·문장 단위로 줄이 바뀌게
+  }
+  function weatherCardHTML() {
+    var w = B.weather, wl = w ? weatherLines(w) : null, ls = Native.locStatus(), useLoc = DB.settings.briefLoc !== false;
+    var head = '<p class="brief-kicker"><span class="badge brief-w">날씨</span>';
+    var body = '', foot = '';
+    if (wl) {
+      var where = w.ko || (w.src === 'here' ? '지금 있는 곳' : '');
+      var why = { here: '지금 있는 곳', last: '마지막으로 위치를 잡은 곳', off: '폰 위치가 꺼져 있어서 마지막으로 잡은 곳', denied: '위치 권한이 없어서 마지막으로 잡은 곳', nofix: '위치를 못 잡아서 마지막으로 잡은 곳' }[w.src] || '';
+      head += '<span class="brief-where">' + esc(where) + (why ? '<small>' + why + '</small>' : '') + '</span>';
+      body = wl.map(function (l, i) { return lineHTML('w' + i, l.en, l.ko); }).join('');
+      if (useLoc && ls && !ls.granted) foot += '<button class="btn small quiet" data-act="brief-loc">위치 권한 주기</button>';
+      else if (useLoc && ls && !ls.enabled) foot += '<button class="btn small quiet" data-act="brief-loc-on">폰 위치 켜기</button>';
+      foot += '<span class="brief-credit">날씨 자료: Open-Meteo</span>';
+    } else if (B.wBusy) {
+      body = '<p class="brief-wait">날씨를 받고 있어요.</p>';
+    } else if (!Native.canWeather) {
+      body = '<p class="brief-wait">날씨는 폰 앱에서 보여 줘요.</p>';
+    } else if (B.wErr === 'noplace') { // 위치를 못 쓰고, 마지막으로 잡은 곳도 없음: 아무 도시 날씨나 보여 주지 않는다
+      if (!useLoc) { body = '<p class="brief-wait">위치를 쓰지 않게 해 두어서 날씨는 빼고 읽어요.</p>'; foot = '<button class="btn small quiet" data-act="brief-loc">위치 쓰기</button>'; }
+      else if (ls && !ls.granted) { body = '<p class="brief-wait">위치 권한을 주면 지금 있는 곳 날씨를 보여 줘요. 그전에는 날씨는 빼고 읽어요.</p>'; foot = '<button class="btn small quiet" data-act="brief-loc">위치 권한 주기</button>'; }
+      else if (ls && !ls.enabled) { body = '<p class="brief-wait">폰 위치가 꺼져 있어요. 켜면 지금 있는 곳 날씨를 보여 줘요.</p>'; foot = '<button class="btn small quiet" data-act="brief-loc-on">폰 위치 켜기</button>'; }
+      else { body = '<p class="brief-wait">지금 위치를 잡지 못했어요. 잠시 뒤에 다시 받아 보세요.</p>'; foot = '<button class="btn small quiet" data-act="brief-weather">다시 받기</button>'; }
+    } else {
+      body = '<p class="brief-wait">날씨를 받지 못했어요. 인터넷 연결을 확인해 주세요.</p>';
+      foot = '<button class="btn small quiet" data-act="brief-weather">다시 받기</button>';
+    }
+    if (useLoc && ls && !ls.granted && !DB.meta.briefLocAsked && Native.canWeather) {
+      if (B.wErr === 'noplace') body = ''; // 묻는 말이 같은 이야기를 한다
+      var bp0 = briefPlace();
+      foot = '<span class="brief-ask">폰 위치로 지금 있는 곳 날씨를 볼까요?</span><button class="btn small primary" data-act="brief-loc">위치 쓰기</button><button class="btn small quiet" data-act="brief-loc-no">' + (bp0 ? esc(placeLabel(bp0)) + ' 날씨로' : '위치 없이') + '</button>';
+    }
+    return '<section class="brief-card weather" id="brief-weather">' + head + '</p>' + body + (foot ? '<div class="brief-wfoot">' + foot + '</div>' : '') + '</section>';
+  }
+  function questionCardHTML(day, log) {
+    var q = day.question;
+    return '<section class="brief-card question"><p class="brief-kicker"><span class="badge brief-q">오늘의 질문</span></p>' + lineHTML('q', q.en, q.ko, 'brief-title') +
+      (q.starters.length ? '<p class="brief-starters">이렇게 시작해 보세요: ' + q.starters.map(function (x) { return '<span>' + esc(x) + '</span>'; }).join(' ') + '</p>' : '') +
+      '<label class="sr-only" for="brief-answer">오늘의 질문에 영어로 답하기</label>' +
+      '<textarea id="brief-answer" class="brief-answer" data-input="brief-answer" data-k="' + day.date + '" rows="4" placeholder="영어로 두세 문장 써 보세요. 틀려도 괜찮아요." autocapitalize="sentences" spellcheck="false">' + esc(log.ans || '') + '</textarea>' +
+      '<div class="read-actions">' + (Native.canSpeech ? '<button class="btn quiet" data-act="brief-mic">말로 답하기</button>' : '<span></span>') +
+      '<button class="btn primary" data-act="brief-send" data-k="' + day.date + '">Claude에게 고쳐 받기</button></div>' +
+      '<p class="hint">' + (log.sent ? '보낸 적 있어요. ' : '') + '누르면 Claude 앱이 열리고 답이 들어가요. 고친 문장과 이유를 한국어로 알려 주고, 질문을 하나 더 해 줘요.</p></section>';
+  }
+  function weekTitles(day) {
+    var b = DB.briefs || {}, ks = Object.keys(b).filter(function (k) { return k <= day.date && k > F.addDaysKey(day.date, -7); }).sort().reverse(), t = [];
+    ks.forEach(function (k) { b[k].items.forEach(function (it) { if (t.length < 6 && it.title) t.push(it.title); }); });
+    return t;
+  }
+  function sundayCardHTML(day) {
+    return '<section class="brief-card sunday"><p class="brief-kicker"><span class="badge brief-q">일요일 말하기</span></p>' +
+      '<p class="brief-plain">이번 주 소식으로 Claude와 영어로 10분쯤 이야기해 봐요. 단추를 누르면 Claude 앱에 시작 글이 들어가요. 보낸 뒤 입력 칸 옆의 음성 대화 단추를 누르세요.</p>' +
+      '<button class="btn primary wide" data-act="brief-talk" data-k="' + day.date + '">Claude 앱에서 이야기하기</button></section>';
+  }
+  function pastBriefsHTML(day) {
+    var b = DB.briefs || {}, ks = Object.keys(b).sort().reverse().filter(function (k) { return !day || k !== day.date; }).slice(0, 6);
+    if (!ks.length) return '';
+    return '<section class="brief-past"><h3>지난 브리핑</h3><ul class="read-list">' + ks.map(function (k) {
+      var lg = (DB.briefLog || {})[k] || {};
+      return '<li><button class="brief-row" data-act="brief-day" data-k="' + k + '"><span class="badge">' + keyLabel(k) + '</span><span class="read-title">' + esc(b[k].items[0].title) + '</span>' + (lg.heard ? '<span class="read-done">들음</span>' : '') + '</button></li>';
+    }).join('') + '</ul></section>';
+  }
+  function briefBarHTML() {
+    var n = B.lines.length, label;
+    if (B.playing && !B.single) label = '멈추기';
+    else if (B.idx > 0 && B.idx < n) label = '이어 듣기';
+    else label = '전체 듣기';
+    var where = B.idx >= 0 && n ? ' (' + (B.idx + 1) + '/' + n + '번째 문장)' : '';
+    var rate = briefRate(), rl = (BRIEF_RATES.filter(function (r) { return r[0] === rate; })[0] || [0, '보통'])[1];
+    return '<div class="brief-bar" id="brief-bar"><button class="btn primary" data-act="brief-play"' + (n ? '' : ' disabled') + ' aria-label="' + label + where + '">' + (B.playing && !B.single ? '' : ICON.speak) + label + '</button>' +
+      '<button class="btn quiet" data-act="brief-ko" aria-pressed="' + (DB.settings.briefKo !== false) + '">해석</button>' +
+      '<button class="btn quiet" data-act="brief-rate" aria-label="읽는 빠르기 ' + rl + '. 누르면 바뀌어요">' + rl + '</button></div>';
+  }
+  function updateBriefBar() { var bar = document.getElementById('brief-bar'); if (bar) bar.outerHTML = briefBarHTML(); }
+  function markNow() {
+    if (state.overlay !== 'brief') return;
+    var cur = B.playing && B.lines[B.idx] ? B.lines[B.idx].k : null;
+    overlay.querySelectorAll('.bl.now').forEach(function (e) { if (e.dataset.k !== cur) e.classList.remove('now'); });
+    if (!cur) return;
+    var el = overlay.querySelector('.bl[data-k="' + cur + '"]');
+    if (el && !el.classList.contains('now')) {
+      el.classList.add('now');
+      if (!B.single) { try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) { el.scrollIntoView(); } }
+    }
+  }
+
+  /* ---------- 읽기 ---------- */
+  function briefPlay(from, single) {
+    if (!B.lines.length) return;
+    Native.stopSpeak();
+    B.gen++; B.playing = true; B.single = !!single; B.idx = Math.max(0, Math.min(from, B.lines.length - 1)); B.retry = 0;
+    sayBriefLine();
+    updateBriefBar();
+  }
+  function sayBriefLine() {
+    var ln = B.lines[B.idx];
+    if (!ln) { briefStop(true); return; }
+    var id = 'b' + B.gen + '-' + B.idx;
+    B.curId = id;
+    var r = Native.speakLine(ln.say || ln.en, id, briefRate());
+    markNow();
+    if (r === 0) { // 폰 음성을 준비하는 중: 0.5초마다 다시 (5초까지)
+      if (++B.retry > 10) { briefStop(false); toast('음성을 준비하지 못했어요. 잠시 뒤 다시 눌러 주세요.'); return; }
+      setTimeout(function () { if (B.playing && B.curId === id) sayBriefLine(); }, 500);
+      return;
+    }
+    B.retry = 0;
+    if (r === -1) { briefStop(false); toast('폰에 영어 음성이 없어요. 폰 설정에서 텍스트 음성 변환(TTS) 영어를 설치해 주세요.'); }
+  }
+  function onBriefTts(arg) {
+    var p = String(arg || '').split('|'), kind = p[0], id = p[1];
+    if (!B.playing || id !== B.curId) return;
+    if (kind === 'stop') { B.playing = false; B.curId = null; B.single = false; if (state.overlay === 'brief') { markNow(); updateBriefBar(); } return; } // 다른 소리가 끊었으면 멈춘 것으로 (이어 듣기 가능)
+    if (kind !== 'done' && kind !== 'error') return;
+    if (B.single) { briefStop(false); return; }
+    B.idx++;
+    if (B.idx >= B.lines.length) { briefStop(true); return; }
+    sayBriefLine();
+    if (state.overlay === 'brief') updateBriefBar();
+  }
+  function briefStop(finished) {
+    var was = B.playing;
+    B.playing = false; B.curId = null;
+    if (was && !finished) Native.stopSpeak();
+    if (finished && !B.single) {
+      var day = briefPick(B.key || todayKey());
+      if (day) { briefLog(day.date).heard = Date.now(); saveSoon(); }
+      B.idx = -1;
+    }
+    B.single = false;
+    if (state.overlay === 'brief') { markNow(); updateBriefBar(); }
+  }
+
+  /* ---------- 답하기 ---------- */
+  function briefAnswerText(day, ans) {
+    return '[꺼내보카 아침 영어, ' + keyLabel(day.date) + ']\n' +
+      '오늘의 질문: ' + day.question.en + '\n' +
+      '내 답: ' + ans + '\n\n' +
+      '저는 영어 초급자예요. 제 답을\n1) 자연스러운 영어로 고쳐 주고\n2) 고친 이유를 한국어로 짧게 설명해 주고\n3) 같은 주제로 쉬운 질문을 하나 더 해 주세요.';
+  }
+  function briefTalkText(day) {
+    var t = weekTitles(day);
+    return 'Let\'s practice English conversation for about 10 minutes.\n' +
+      'I\'m a beginner, so please speak slowly and use short, easy sentences.\n' +
+      (t.length ? 'This week\'s topics:\n' + t.map(function (x) { return '- ' + x; }).join('\n') + '\n' : '') +
+      'Ask me one question at a time about these topics or my week.\n' +
+      'If I make a mistake, say the correct sentence once, then keep talking.\n' +
+      '(한국어 설명은 꼭 필요할 때만 짧게 해 주세요.)';
+  }
+  var briefAnsTimer = null;
+  function saveBriefAnswer(el) {
+    var k = el.dataset.k; if (!k) return;
+    briefLog(k).ans = el.value.slice(0, 2000); briefLog(k).ansAt = Date.now();
+    clearTimeout(briefAnsTimer); briefAnsTimer = setTimeout(saveNow, 800);
+  }
+  function onSpeechText(text) {
+    var el = document.getElementById('brief-answer');
+    if (!el) return;
+    var t = str(text);
+    if (!t) return;
+    t = t.charAt(0).toUpperCase() + t.slice(1);
+    if (!/[.!?]$/.test(t)) t += '.';
+    el.value = (el.value.trim() ? el.value.replace(/\s+$/, '') + ' ' : '') + t;
+    saveBriefAnswer(el);
+    toast('말한 내용을 넣었어요. 틀린 낱말은 고쳐서 보내도 돼요.');
+  }
 
   /* ================= 앱 업데이트 ================= */
   var updateSilent = false;
@@ -3558,6 +4103,8 @@
   if (movedDays.length) toast(moveToast(movedDays));
   setTimeout(autoCheckUpdate, 1500);
   setTimeout(function () { syncReads(false); }, 2500);
+  setTimeout(function () { syncBrief(false); }, 3500); // 1.0.20
+  if (!loadProblem && Native.takeLaunchAction() === 'brief') openBrief({ auto: true, keepModals: true }); // 아침 영어 알림을 눌러 켰다 (업데이트 안내 창은 위에 그대로 둔다)
 
   // 테스트용 접근점
   window.__kv = { get db() { return DB; }, parseLines: parseLines, weekMissedIds: weekMissedIds, studyCsv: studyCsv, newQueueCards: newQueueCards, todayPlan: todayPlan, streakAt: streakAt, buildSummary: buildSummary, importText: importText, checkTyped: checkTyped, clozeParts: clozeParts,
@@ -3569,5 +4116,7 @@
     openTaps: openTaps, tapCount: tapCount, tapSentence: tapSentence, tapPracticeIds: tapPracticeIds, startPractice: startPractice, startStudy: startStudy, renderStudy: renderStudy,
     attendance: attendance, makeupOf: makeupOf, trackStart: trackStart, weeklyRest: weeklyRest, weekStrip: weekStrip, tomorrowRest: tomorrowRest, keepStampLine: keepStampLine, majorTomorrowLine: majorTomorrowLine, goalCard: goalCard,
     stampLook: stampLook, restOpen: restOpen, checkAttendance: checkAttendance, checkMajorAttendance: checkMajorAttendance, sents: sents, meanHTML: meanHTML, doneToday: doneToday, amountOf: amountOf, bonusButton: bonusButton,
+    syncBrief: syncBrief, openBrief: openBrief, renderBrief: renderBrief, weatherLines: weatherLines, briefLines: briefLines, cleanBriefDay: cleanBriefDay, importBriefs: importBriefs,
+    briefPick: briefPick, briefAnswerText: briefAnswerText, briefTalkText: briefTalkText, briefSection: briefSection, syncWeather: syncWeather, get brief() { return B; }, // 1.0.20
     get ttsBad() { return ttsBad; } };
 })();

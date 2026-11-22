@@ -10,13 +10,22 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
+import android.location.Address;
+import android.location.Geocoder;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.OpenableColumns;
 import android.provider.Settings;
+import android.speech.RecognizerIntent;
 import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -35,6 +44,8 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 /** 앱 화면(assets/www)을 띄우고, 화면이 부탁하는 폰 기능(저장, 알림, 파일, 발음)을 처리한다. */
@@ -42,6 +53,8 @@ public class MainActivity extends Activity {
     private static final int REQ_EXPORT = 1001;
     private static final int REQ_IMPORT = 1002;
     private static final int REQ_NOTIF = 1003;
+    private static final int REQ_LOC = 1004;
+    private static final int REQ_SPEECH = 1005;
     private static final int MAX_IMPORT_BYTES = 30 * 1024 * 1024;
 
     private WebView web;
@@ -50,11 +63,13 @@ public class MainActivity extends Activity {
     private volatile boolean ttsFailed = false;
     private String pendingExport = null;
     private volatile String pickedText = null;
+    private volatile String launchAction = null; // 1.0.20 알림을 눌러 켠 경우 'brief' (화면이 takeLaunchAction으로 한 번 가져간다)
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         Reminders.ensureChannel(this);
+        launchAction = openActionOf(getIntent());
 
         web = new WebView(this);
         web.setBackgroundColor(getColor(R.color.desk));
@@ -90,6 +105,7 @@ public class MainActivity extends Activity {
                 int r = tts.setLanguage(Locale.US);
                 if (r >= TextToSpeech.LANG_AVAILABLE) {
                     tts.setSpeechRate(0.95f);
+                    tts.setOnUtteranceProgressListener(new BriefSpeech());
                     ttsReady = true;
                 } else {
                     ttsFailed = true;
@@ -112,6 +128,55 @@ public class MainActivity extends Activity {
     protected void onPause() {
         notifyJs("pause", "");
         super.onPause();
+    }
+
+    /** 앱이 켜져 있을 때 아침 영어 알림을 누르면 여기로 온다 (launchMode singleTask). */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        String a = openActionOf(intent);
+        if (a != null) {
+            notifyJs("open", a);
+        }
+    }
+
+    /** 알림에서 온 '열 화면'. 최근 앱 목록에서 다시 연 경우(같은 intent가 다시 옴)는 무시한다. */
+    private static String openActionOf(Intent i) {
+        if (i == null || (i.getFlags() & Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) {
+            return null;
+        }
+        String a = i.getStringExtra("open");
+        return "brief".equals(a) ? a : null;
+    }
+
+    /** 1.0.20 아침 영어를 문장마다 읽을 때, 문장이 끝났다고 화면에 알린다 (아이디가 b로 시작하는 것만). */
+    private final class BriefSpeech extends UtteranceProgressListener {
+        @Override
+        public void onStart(String id) {
+            if (id != null && id.startsWith("b")) notifyJs("tts", "start|" + id);
+        }
+
+        @Override
+        public void onDone(String id) {
+            if (id != null && id.startsWith("b")) notifyJs("tts", "done|" + id);
+        }
+
+        @Override
+        @SuppressWarnings("deprecation")
+        public void onError(String id) {
+            if (id != null && id.startsWith("b")) notifyJs("tts", "error|" + id);
+        }
+
+        @Override
+        public void onError(String id, int code) {
+            onError(id);
+        }
+
+        @Override
+        public void onStop(String id, boolean interrupted) {
+            if (id != null && id.startsWith("b")) notifyJs("tts", "stop|" + id);
+        }
     }
 
     @Override
@@ -156,7 +221,12 @@ public class MainActivity extends Activity {
     }
 
     private static HttpURLConnection openGet(String url, int readTimeoutMs) throws IOException {
-        HttpURLConnection c = (HttpURLConnection) new URL(url + "?t=" + System.currentTimeMillis()).openConnection();
+        return openGet(url, readTimeoutMs, true);
+    }
+
+    /** bust = 캐시를 피하려고 주소 끝에 시각을 붙일지. 날씨처럼 이미 '?'가 있는 주소에는 붙이지 않는다. */
+    private static HttpURLConnection openGet(String url, int readTimeoutMs, boolean bust) throws IOException {
+        HttpURLConnection c = (HttpURLConnection) new URL(bust ? url + "?t=" + System.currentTimeMillis() : url).openConnection();
         c.setConnectTimeout(10000);
         c.setReadTimeout(readTimeoutMs);
         c.setRequestProperty("Cache-Control", "no-cache");
@@ -187,7 +257,11 @@ public class MainActivity extends Activity {
 
     /** 글 파일을 받는다. 정해 둔 크기를 넘으면 그만둔다. */
     private static String httpTextMax(String url, int maxBytes) throws IOException {
-        HttpURLConnection c = openGet(url, 15000);
+        return httpTextMax(url, maxBytes, true);
+    }
+
+    private static String httpTextMax(String url, int maxBytes, boolean bust) throws IOException {
+        HttpURLConnection c = openGet(url, 15000, bust);
         try {
             if (c.getResponseCode() != 200) throw new IOException("HTTP " + c.getResponseCode());
             try (InputStream in = c.getInputStream()) {
@@ -221,6 +295,317 @@ public class MainActivity extends Activity {
                 readsBusy = false;
             }
         }).start();
+    }
+
+    /* ---------- 1.0.20 아침 영어: 브리핑 파일, 날씨, 위치 ---------- */
+    private static final String BRIEF_URL = "https://raw.githubusercontent.com/sshguh2577/kkeonae-voca/brief/brief.json";
+    private static final int BRIEF_MAX_BYTES = 300 * 1024;
+    private static final String WEATHER_URL = "https://api.open-meteo.com/v1/forecast?latitude=%.2f&longitude=%.2f"
+            + "&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,precipitation"
+            + "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max"
+            + "&timezone=auto&forecast_days=1";
+    private volatile boolean briefBusy = false;
+    private volatile boolean weatherBusy = false;
+
+    /** 브리핑 파일을 받아 화면에 넘긴다. 성공하면 'brief'와 글, 실패하면 'brief-fail'. */
+    private void fetchBriefAsync() {
+        if (briefBusy) {
+            return;
+        }
+        briefBusy = true;
+        new Thread(() -> {
+            try {
+                notifyJs("brief", httpTextMax(BRIEF_URL, BRIEF_MAX_BYTES));
+            } catch (Exception e) {
+                notifyJs("brief-fail", "");
+            } finally {
+                briefBusy = false;
+            }
+        }).start();
+    }
+
+    private boolean locGranted() {
+        return checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                || checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    @SuppressWarnings("deprecation")
+    private boolean locEnabled() {
+        LocationManager lm = getSystemService(LocationManager.class);
+        if (lm == null) return false;
+        if (Build.VERSION.SDK_INT >= 28) return lm.isLocationEnabled();
+        try {
+            return lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) || lm.isProviderEnabled(LocationManager.GPS_PROVIDER);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void requestLoc() {
+        if (locGranted()) {
+            notifyJs("loc-permission", "1");
+            return;
+        }
+        SharedPreferences sp = getSharedPreferences("app", MODE_PRIVATE);
+        boolean askedBefore = sp.getBoolean("asked_loc", false);
+        if (!askedBefore || shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_COARSE_LOCATION)) {
+            sp.edit().putBoolean("asked_loc", true).apply();
+            requestPermissions(new String[]{Manifest.permission.ACCESS_COARSE_LOCATION}, REQ_LOC);
+            return;
+        }
+        // 두 번 거절하면 안드로이드가 더 묻지 않는다: 앱 정보 화면에서 직접 켜게 한다
+        notifyJs("loc-permission", "settings");
+        openAppDetails();
+    }
+
+    private interface LocCb {
+        void got(Location l);
+    }
+
+    /** 위치를 한 번 잡는다(화면 스레드에서 부른다). 30분 안에 잡힌 위치가 있으면 그것, 없으면 새로 한 번(10초까지), 못 잡으면 예전 위치나 null. */
+    @SuppressWarnings({"deprecation", "MissingPermission"})
+    private void locateThen(LocCb cb) {
+        LocationManager lm = getSystemService(LocationManager.class);
+        if (lm == null) {
+            cb.got(null);
+            return;
+        }
+        Location best = null;
+        List<String> provs = new ArrayList<>();
+        try {
+            provs = lm.getProviders(true);
+        } catch (Exception ignored) {
+            // 목록을 못 읽으면 아래에서 null
+        }
+        for (String p : provs) {
+            try {
+                Location l = lm.getLastKnownLocation(p);
+                if (l != null && (best == null || l.getTime() > best.getTime())) best = l;
+            } catch (Exception ignored) {
+                // 권한이 없는 제공자(GPS 등)는 건너뛴다
+            }
+        }
+        if (best != null && System.currentTimeMillis() - best.getTime() < 30 * 60000L) {
+            cb.got(best);
+            return;
+        }
+        String prov = provs.contains("fused") ? "fused" : provs.contains(LocationManager.NETWORK_PROVIDER) ? LocationManager.NETWORK_PROVIDER : null;
+        if (prov == null) {
+            cb.got(best);
+            return;
+        }
+        final Location fallback = best;
+        final boolean[] done = {false};
+        final Handler h = new Handler(Looper.getMainLooper());
+        final Runnable[] timeout = new Runnable[1];
+        final LocCb once = l -> {
+            if (done[0]) return;
+            done[0] = true;
+            h.removeCallbacks(timeout[0]);
+            cb.got(l != null ? l : fallback);
+        };
+        timeout[0] = () -> once.got(null);
+        h.postDelayed(timeout[0], 10000);
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                lm.getCurrentLocation(prov, null, getMainExecutor(), once::got);
+            } else {
+                lm.requestSingleUpdate(prov, new LocationListener() {
+                    @Override
+                    public void onLocationChanged(Location l) {
+                        once.got(l);
+                    }
+
+                    @Override
+                    public void onStatusChanged(String p, int status, Bundle extras) {
+                    }
+
+                    @Override
+                    public void onProviderEnabled(String p) {
+                    }
+
+                    @Override
+                    public void onProviderDisabled(String p) {
+                    }
+                }, Looper.getMainLooper());
+            }
+        } catch (Exception e) {
+            once.got(null);
+        }
+    }
+
+    private static String firstText(String... xs) {
+        for (String x : xs) {
+            if (x != null && !x.trim().isEmpty()) return x.trim();
+        }
+        return "";
+    }
+
+    /** 시·군 이름. 한국어는 '춘천시' → '춘천', '서울특별시' → '서울'. 영어는 'Chuncheon-si' → 'Chuncheon'. */
+    static String cityName(String locality, String subAdmin, String admin, boolean ko) {
+        String n = firstText(locality, subAdmin, admin);
+        if (n.isEmpty()) return "";
+        if (ko) {
+            n = n.replaceAll("(특별시|광역시|특별자치시|특별자치도)$", "");
+            if (n.length() >= 3 && n.endsWith("시")) n = n.substring(0, n.length() - 1);
+        } else {
+            n = n.replaceAll("(?i)-(si|gun|gu)$", "").replaceAll("(?i)\\s+(Metropolitan City|Special City|City)$", "");
+        }
+        return n.trim();
+    }
+
+    @SuppressWarnings("deprecation")
+    private String[] placeNames(double lat, double lon) {
+        String[] out = {"", ""};
+        if (!Geocoder.isPresent()) return out;
+        Locale[] locales = {Locale.KOREAN, Locale.US};
+        for (int i = 0; i < 2; i++) {
+            try {
+                List<Address> a = new Geocoder(this, locales[i]).getFromLocation(lat, lon, 1);
+                if (a != null && !a.isEmpty()) {
+                    Address x = a.get(0);
+                    out[i] = cityName(x.getLocality(), x.getSubAdminArea(), x.getAdminArea(), i == 0);
+                }
+            } catch (Exception ignored) {
+                // 이름을 못 찾아도 날씨는 보여 준다
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 날씨를 받는다. arg = {"useLoc":true, "lat", "lon", "ko", "en"}. lat·lon·ko·en은 마지막으로 위치를 잡은 곳이고, 잡은 적이 없으면 빠진다.
+     * 결과는 window.__native('weather', {"ok":true, "src":"here|last|off|denied|nofix", "lat", "lon", "ko", "en", "data":{Open-Meteo 응답}}).
+     * 앱에 정해 둔 도시는 없다: 위치를 못 쓰고 마지막 곳도 없으면 날씨를 받지 않고 {"ok":false, "src", "noplace":true}를 보낸다.
+     */
+    private void fetchWeatherAsync(String arg) {
+        if (weatherBusy) return;
+        weatherBusy = true;
+        double flat = Double.NaN, flon = Double.NaN;
+        String fko = "", fen = "";
+        boolean useLoc = true;
+        try {
+            JSONObject a = new JSONObject(arg == null || arg.isEmpty() ? "{}" : arg);
+            flat = a.optDouble("lat", Double.NaN);
+            flon = a.optDouble("lon", Double.NaN);
+            fko = a.optString("ko", "");
+            fen = a.optString("en", "");
+            useLoc = a.optBoolean("useLoc", true);
+        } catch (Exception ignored) {
+            // 마지막 곳 없이
+        }
+        final boolean hasLast = !Double.isNaN(flat) && !Double.isNaN(flon) && Math.abs(flat) <= 90 && Math.abs(flon) <= 180;
+        final double lat0 = flat, lon0 = flon;
+        final String ko0 = fko, en0 = fen;
+        String why = !useLoc ? "last" : !locGranted() ? "denied" : !locEnabled() ? "off" : null;
+        if (why != null) {
+            if (hasLast) weatherFor(null, lat0, lon0, ko0, en0, why);
+            else weatherNone(why);
+            return;
+        }
+        runOnUiThread(() -> locateThen(l -> {
+            if (l != null) weatherFor(l, lat0, lon0, ko0, en0, "here");
+            else if (hasLast) weatherFor(null, lat0, lon0, ko0, en0, "nofix");
+            else weatherNone("nofix");
+        }));
+    }
+
+    /** 위치를 못 쓰고 마지막으로 잡은 곳도 없을 때: 날씨를 받지 않았다고 알린다 */
+    private void weatherNone(String src) {
+        JSONObject o = new JSONObject();
+        try {
+            o.put("ok", false);
+            o.put("src", src);
+            o.put("noplace", true);
+        } catch (Exception ignored) {
+            // 빈 결과
+        }
+        weatherBusy = false;
+        notifyJs("weather", o.toString());
+    }
+
+    private void weatherFor(Location loc, double flat, double flon, String fko, String fen, String src) {
+        new Thread(() -> {
+            JSONObject o = new JSONObject();
+            try {
+                double lat = loc != null ? loc.getLatitude() : flat;
+                double lon = loc != null ? loc.getLongitude() : flon;
+                String ko = fko, en = fen;
+                if (loc != null) {
+                    String[] n = placeNames(lat, lon);
+                    ko = n[0];
+                    en = n[1];
+                }
+                String text = httpTextMax(String.format(Locale.US, WEATHER_URL, lat, lon), 200 * 1024, false);
+                o.put("ok", true);
+                o.put("src", src);
+                o.put("lat", Math.round(lat * 100) / 100.0);
+                o.put("lon", Math.round(lon * 100) / 100.0);
+                o.put("ko", ko);
+                o.put("en", en);
+                o.put("data", new JSONObject(text));
+            } catch (Exception e) {
+                try {
+                    o.put("ok", false);
+                    o.put("src", src);
+                } catch (Exception ignored) {
+                    // 빈 결과
+                }
+            } finally {
+                weatherBusy = false;
+            }
+            notifyJs("weather", o.toString());
+        }).start();
+    }
+
+    /* ---------- 1.0.20 말로 답하기, Claude 앱으로 보내기 ---------- */
+    private static final String CLAUDE_PKG = "com.anthropic.claude";
+
+    private void startSpeechInput() {
+        Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US");
+        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en-US");
+        i.putExtra(RecognizerIntent.EXTRA_PROMPT, "영어로 말해 주세요");
+        i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+        try {
+            startActivityForResult(i, REQ_SPEECH);
+        } catch (Exception e) {
+            notifyJs("speech-fail", "none");
+        }
+    }
+
+    private boolean hasClaudeApp() {
+        try {
+            getPackageManager().getPackageInfo(CLAUDE_PKG, 0);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 글을 다른 앱으로 보낸다. target이 claude면 Claude 앱으로 바로, 안 되면 보낼 곳 고르기 창. */
+    private void shareTextTo(String text, String target) {
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType("text/plain");
+        send.putExtra(Intent.EXTRA_TEXT, text);
+        if ("claude".equals(target)) {
+            try {
+                Intent c = new Intent(send);
+                c.setPackage(CLAUDE_PKG);
+                startActivity(c);
+                notifyJs("shared-text", "claude");
+                return;
+            } catch (Exception ignored) {
+                // Claude 앱이 없거나 받지 못하면 고르기 창으로
+            }
+        }
+        try {
+            startActivity(Intent.createChooser(send, "보낼 곳 고르기"));
+            notifyJs("shared-text", "chooser");
+        } catch (Exception e) {
+            notifyJs("shared-text", "fail");
+        }
     }
 
     private void checkUpdateAsync() {
@@ -445,6 +830,15 @@ public class MainActivity extends Activity {
             } catch (Exception e) {
                 notifyJs("exported", "fail");
             }
+        } else if (requestCode == REQ_SPEECH) {
+            if (resultCode == RESULT_OK && data != null) {
+                ArrayList<String> r = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
+                if (r != null && !r.isEmpty() && r.get(0) != null && !r.get(0).trim().isEmpty()) {
+                    notifyJs("speech", r.get(0).trim());
+                    return;
+                }
+            }
+            notifyJs("speech-fail", resultCode == RESULT_CANCELED ? "cancel" : "empty");
         } else if (requestCode == REQ_IMPORT) {
             if (resultCode != RESULT_OK || data == null || data.getData() == null) {
                 return;
@@ -532,6 +926,8 @@ public class MainActivity extends Activity {
         if (requestCode == REQ_NOTIF) {
             Reminders.scheduleAll(this);
             notifyJs("notif-permission", notificationsAllowed() ? "1" : "0");
+        } else if (requestCode == REQ_LOC) {
+            notifyJs("loc-permission", locGranted() ? "1" : "0");
         }
     }
 
@@ -613,6 +1009,97 @@ public class MainActivity extends Activity {
             }
             t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "kv");
             return 1;
+        }
+
+        /** 1.0.20 아침 영어: 문장 하나를 정한 빠르기로 읽는다. 끝나면 window.__native('tts', 'done|아이디'). 1 = 읽음, 0 = 준비 중, -1 = 음성 없음 */
+        @JavascriptInterface
+        public int speakLine(String text, String id, float rate) {
+            TextToSpeech t = tts;
+            if (t == null || ttsFailed) {
+                return -1;
+            }
+            if (!ttsReady) {
+                return 0;
+            }
+            t.setSpeechRate(rate >= 0.5f && rate <= 1.6f ? rate : 0.95f);
+            int r = t.speak(text, TextToSpeech.QUEUE_FLUSH, null, id == null || id.isEmpty() ? "b" : id);
+            t.setSpeechRate(0.95f); // 단어 읽기는 처음 빠르기 그대로
+            return r == TextToSpeech.SUCCESS ? 1 : -1;
+        }
+
+        @JavascriptInterface
+        public void stopSpeak() {
+            TextToSpeech t = tts;
+            if (t != null) {
+                t.stop();
+            }
+        }
+
+        @JavascriptInterface
+        public void fetchBrief() {
+            fetchBriefAsync();
+        }
+
+        @JavascriptInterface
+        public void fetchWeather(String arg) {
+            fetchWeatherAsync(arg);
+        }
+
+        /** {"granted": 위치 권한, "enabled": 폰 위치 켜짐} */
+        @JavascriptInterface
+        public String locationStatus() {
+            try {
+                JSONObject o = new JSONObject();
+                o.put("granted", locGranted());
+                o.put("enabled", locEnabled());
+                return o.toString();
+            } catch (Exception e) {
+                return "{}";
+            }
+        }
+
+        @JavascriptInterface
+        public void requestLocation() {
+            runOnUiThread(MainActivity.this::requestLoc);
+        }
+
+        @JavascriptInterface
+        public void openLocationSettings() {
+            runOnUiThread(() -> {
+                try {
+                    startActivity(new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS));
+                } catch (Exception e) {
+                    openAppDetails();
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void startSpeech() {
+            runOnUiThread(MainActivity.this::startSpeechInput);
+        }
+
+        @JavascriptInterface
+        public boolean hasClaude() {
+            return hasClaudeApp();
+        }
+
+        @JavascriptInterface
+        public void shareText(String text, String target) {
+            runOnUiThread(() -> shareTextTo(text, target));
+        }
+
+        /** 알림을 눌러 켰으면 'brief'를 한 번만 돌려준다. */
+        @JavascriptInterface
+        public String takeLaunchAction() {
+            String a = launchAction;
+            launchAction = null;
+            return a == null ? "" : a;
+        }
+
+        @JavascriptInterface
+        public void testBriefNotification() {
+            Reminders.showBrief(MainActivity.this, true);
         }
 
         @JavascriptInterface

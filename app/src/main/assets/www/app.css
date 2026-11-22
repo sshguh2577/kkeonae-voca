@@ -576,12 +576,12 @@ mark.diff { background: none; color: var(--stamp-ink, var(--stamp)); font-weight
 .memory .lead strong { color: var(--good); }
 
 /* 1.0.12: 오늘의 지문 */
-.reads { margin: 26px 0 0; }
-.reads .lead { margin: 0 0 8px; font-size: 14px; color: var(--ink-3); }
-.reads .lead strong { font-size: 17px; font-weight: 800; color: var(--ink); margin-right: 8px; }
+.reads, .brief-home { margin: 26px 0 0; }
+.reads .lead, .brief-home .lead { margin: 0 0 8px; font-size: 14px; color: var(--ink-3); }
+.reads .lead strong, .brief-home .lead strong { font-size: 17px; font-weight: 800; color: var(--ink); margin-right: 8px; }
 .read-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-.read-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 54px; padding: 8px 14px; border: 0; border-radius: 14px; background: var(--card); box-shadow: inset 0 0 0 1px var(--card-edge); color: var(--ink); font: inherit; text-align: left; touch-action: manipulation; }
-button.read-row:active { background: var(--field); }
+.read-row, .brief-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 54px; padding: 8px 14px; border: 0; border-radius: 14px; background: var(--card); box-shadow: inset 0 0 0 1px var(--card-edge); color: var(--ink); font: inherit; text-align: left; touch-action: manipulation; }
+button.read-row:active, button.brief-row:active { background: var(--field); }
 li.read-row.none { color: var(--ink-3); font-size: 14px; background: transparent; box-shadow: inset 0 0 0 1px var(--line); }
 .read-title { flex: 1; font-weight: 700; }
 .read-done { font-size: 13px; color: var(--good); font-weight: 700; }
@@ -697,3 +697,50 @@ button.tap-w { text-decoration: underline; text-decoration-color: var(--blue); t
 .pick-hint { color: var(--ink-3); font-size: 14px; margin: 8px 0 0; }
 .pick-block { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); }
 .pick-block p { margin: 0 0 10px; line-height: 1.6; font-size: 15px; }
+
+/* ---------- 1.0.20 아침 영어 ---------- */
+:root { --world-wash: #E5DDF3; --world-ink: #4A3378; }
+@media (prefers-color-scheme: dark) { :root { --world-wash: #352A4D; --world-ink: #D5C6F2; } }
+.badge.read-world { background: var(--world-wash); color: var(--world-ink); }
+.badge.brief-w { background: var(--amber-wash); color: var(--amber-ink); }
+.badge.brief-q { background: transparent; box-shadow: inset 0 0 0 1.5px var(--blue); color: var(--blue); }
+.brief-view { padding-bottom: 0; }
+.brief-date { margin: 0 0 12px; font-size: 15px; font-weight: 700; color: var(--ink-2); text-align: center; }
+.brief-note { margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; background: var(--field); color: var(--ink-2); font-size: 14.5px; }
+.brief-card { margin: 0 0 14px; padding: 14px 16px 12px; border-radius: 14px; background: var(--card); box-shadow: inset 0 0 0 1px var(--card-edge), var(--shadow-card); }
+.brief-kicker { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 0 6px; }
+.brief-where { font-weight: 800; font-size: 16px; }
+.brief-where small { display: block; font-weight: 500; font-size: 12.5px; color: var(--ink-3); }
+.bl { margin: 0 -8px; padding: 6px 8px; border-radius: 10px; cursor: pointer; transition: background .15s; -webkit-tap-highlight-color: transparent; }
+.bl:active { background: var(--field); }
+.bl.now { background: var(--blue-wash); }
+.bl-en { display: block; font-family: var(--font-en); font-size: 17px; line-height: 1.55; color: var(--ink); }
+.bl-ko { display: block; margin-top: 2px; font-size: 14.5px; line-height: 1.55; color: var(--ink-2); }
+.brief-title .bl-en { font-family: var(--font-ko); font-weight: 800; font-size: 18.5px; line-height: 1.4; }
+.brief-title .bl-ko { font-weight: 600; }
+.no-ko .bl-ko, .no-ko .brief-starters { display: none; }
+.brief-words { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; padding: 0; }
+.brief-words button { display: inline-flex; align-items: baseline; gap: 6px; min-height: 36px; padding: 6px 10px; border: 0; border-radius: 99px; background: var(--field); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink-2); font-size: 14px; }
+.brief-words b { font-family: var(--font-en); font-size: 15.5px; color: var(--ink); }
+.brief-src { display: inline-block; margin: 2px 0 0; padding: 10px 0 6px; font-size: 13px; color: var(--ink-3); text-decoration: underline; text-underline-offset: 3px; }
+.brief-wfoot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 0; }
+.brief-credit { font-size: 12.5px; color: var(--ink-3); margin-left: auto; }
+.brief-ask { flex: 1 0 100%; font-size: 14.5px; color: var(--ink-2); }
+.brief-wait { margin: 4px 0; color: var(--ink-3); font-size: 14.5px; }
+.brief-starters { margin: 8px 0 10px; font-size: 13.5px; color: var(--ink-3); }
+.brief-starters span { display: inline-block; margin: 2px 4px 0 0; padding: 1px 8px; border-radius: 8px; background: var(--field); font-family: var(--font-en); font-size: 15px; color: var(--ink); }
+.brief-answer { display: block; width: 100%; min-height: 104px; margin: 4px 0 0; padding: 10px 12px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--field); font-family: var(--font-en); font-size: 16.5px; line-height: 1.5; resize: vertical; }
+.brief-answer:focus { border-color: var(--blue); outline: none; }
+.brief-card .read-actions { margin: 10px 0 4px; grid-template-columns: 1fr; } /* 'Claude에게 고쳐 받기'가 두 칸 폭에서 꺾이지 않게 한 줄에 하나씩 */
+.brief-plain { margin: 0 0 12px; color: var(--ink-2); font-size: 14.5px; }
+.brief-past { margin: 22px 0 0; }
+.brief-past h3 { margin: 0 0 8px; font-size: 15px; color: var(--ink-2); }
+.brief-foot { text-align: center; margin: 16px 0 0; }
+.brief-bar { position: sticky; bottom: 0; z-index: 2; display: grid; grid-template-columns: 1fr auto auto; gap: 8px; margin: 14px -20px 0; padding: 10px 20px calc(12px + env(safe-area-inset-bottom)); background: var(--desk); box-shadow: 0 -1px 0 var(--line); }
+.brief-bar .btn { white-space: nowrap; padding: 0 14px; min-width: 0; }
+.brief-bar .btn.primary { overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 340px) { .brief-bar .btn { padding: 0 10px; } .brief-bar .btn.primary svg { display: none; } } /* 폭 320 폰에서도 한 줄에 */
+.brief-bar .btn.primary svg { width: 20px; height: 20px; margin-right: 6px; vertical-align: -4px; }
+.brief-bar [data-act="brief-ko"][aria-pressed="false"] { color: var(--ink-3); text-decoration: line-through; }
+.brief-home .read-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; } /* 첫 소식 제목은 두 줄까지 */
+@media (prefers-reduced-motion: reduce) { .bl { transition: none; } }

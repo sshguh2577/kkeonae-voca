@@ -17,11 +17,12 @@ import java.util.Iterator;
 import java.util.Locale;
 
 /**
- * 하루 두 번(공부 알림, 출석 마감 알림) 알람을 예약하고 알림을 띄운다.
+ * 하루 두 번(공부 알림, 출석 마감 알림)과 아침 영어 알림(1.0.20, 슬롯 3) 알람을 예약하고 알림을 띄운다.
  * 알림 내용은 앱이 저장해 둔 summary.json을 읽어서 만든다. 서버는 쓰지 않는다.
  */
 final class Reminders {
     static final String CHANNEL = "study";
+    static final String CHANNEL_BRIEF = "brief";
     private static final long HOUR = 3600000L;
     private static final long DAY = 86400000L;
 
@@ -30,12 +31,19 @@ final class Reminders {
 
     static void ensureChannel(Context c) {
         NotificationManager nm = c.getSystemService(NotificationManager.class);
-        if (nm == null || nm.getNotificationChannel(CHANNEL) != null) {
+        if (nm == null) {
             return;
         }
-        NotificationChannel ch = new NotificationChannel(CHANNEL, "공부 알림", NotificationManager.IMPORTANCE_DEFAULT);
-        ch.setDescription("오늘 할 카드와 출석 마감을 알려 줘요");
-        nm.createNotificationChannel(ch);
+        if (nm.getNotificationChannel(CHANNEL) == null) {
+            NotificationChannel ch = new NotificationChannel(CHANNEL, "공부 알림", NotificationManager.IMPORTANCE_DEFAULT);
+            ch.setDescription("오늘 할 카드와 출석 마감을 알려 줘요");
+            nm.createNotificationChannel(ch);
+        }
+        if (nm.getNotificationChannel(CHANNEL_BRIEF) == null) {
+            NotificationChannel ch = new NotificationChannel(CHANNEL_BRIEF, "아침 영어", NotificationManager.IMPORTANCE_DEFAULT);
+            ch.setDescription("아침마다 날씨와 소식 3개, 오늘의 질문을 영어로 알려 줘요");
+            nm.createNotificationChannel(ch);
+        }
     }
 
     static JSONObject summary(Context c) {
@@ -51,6 +59,7 @@ final class Reminders {
         JSONObject s = summary(c);
         schedule(c, 1, s.optJSONObject("n1"));
         schedule(c, 2, s.optJSONObject("n2"));
+        schedule(c, 3, s.optJSONObject("n3")); // 1.0.20 아침 영어 (요약에 n3가 없으면 예약하지 않는다)
     }
 
     private static PendingIntent alarmIntent(Context c, int slot) {
@@ -79,8 +88,8 @@ final class Reminders {
             return;
         }
         Calendar cal = Calendar.getInstance();
-        cal.set(Calendar.HOUR_OF_DAY, cfg.optInt("h", slot == 1 ? 21 : 23));
-        cal.set(Calendar.MINUTE, cfg.optInt("m", 0));
+        cal.set(Calendar.HOUR_OF_DAY, cfg.optInt("h", slot == 1 ? 21 : slot == 3 ? 6 : 23));
+        cal.set(Calendar.MINUTE, cfg.optInt("m", slot == 3 ? 20 : 0));
         cal.set(Calendar.SECOND, 0);
         cal.set(Calendar.MILLISECOND, 0);
         if (cal.getTimeInMillis() <= System.currentTimeMillis() + 5000) {
@@ -101,9 +110,50 @@ final class Reminders {
     static void fire(Context c, int slot) {
         JSONObject s = summary(c);
         try {
-            show(c, slot, s, false);
+            if (slot == 3) {
+                showBrief(c, false);
+            } else {
+                show(c, slot, s, false);
+            }
         } finally {
-            schedule(c, slot, s.optJSONObject(slot == 1 ? "n1" : "n2"));
+            schedule(c, slot, s.optJSONObject("n" + slot));
+        }
+    }
+
+    /** 1.0.20 아침 영어 알림. 출석과 상관없이 날마다 온다(켜 둔 경우). 누르면 앱이 브리핑을 열고 읽어 준다. */
+    static void showBrief(Context c, boolean test) {
+        ensureChannel(c);
+        Calendar cal = Calendar.getInstance();
+        boolean sunday = cal.get(Calendar.DAY_OF_WEEK) == Calendar.SUNDAY;
+        String title = sunday ? "일요일 아침 영어가 왔어요" : "아침 영어 브리핑이 왔어요";
+        String text = sunday
+                ? "날씨와 소식 3개, 오늘의 질문이에요. 일요일에는 이번 주 소식으로 Claude와 영어로 말해 봐요."
+                : "날씨와 금융·보험, 토목, 세계 소식, 그리고 오늘의 질문이에요. 누르면 읽어 줘요.";
+        if (test) {
+            title = "알림 테스트: " + title;
+        }
+        Intent open = new Intent(c, MainActivity.class);
+        open.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        open.putExtra("open", "brief");
+        PendingIntent content = PendingIntent.getActivity(c, 103, open,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        Notification n = new Notification.Builder(c, CHANNEL_BRIEF)
+                .setSmallIcon(R.drawable.ic_stat_notify)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setStyle(new Notification.BigTextStyle().bigText(text))
+                .setColor(0xFF2457A6)
+                .setAutoCancel(true)
+                .setContentIntent(content)
+                .build();
+        NotificationManager nm = c.getSystemService(NotificationManager.class);
+        if (nm == null) {
+            return;
+        }
+        try {
+            nm.notify(3, n);
+        } catch (SecurityException ignored) {
+            // 알림 권한이 없으면 조용히 넘어간다
         }
     }
 
